@@ -22,6 +22,10 @@ typedef struct Smbc {
   Joypad joypad2;
   Ppu ppu;
   Apu apu;
+  /* frames the power-on reset consumes before the cold boot finishes
+   * (boot.h). These are emulated frames with the screen still blank,
+   * so a frame-indexed comparison counts them first. */
+  unsigned reset_frames;
   /* #41: CPU cycles the NMI handler that overruns this frame still owes,
    * measured from this frame's start. 0 when no handler overruns. */
   uint32_t nmi_owed_cycles;
