@@ -81,6 +81,8 @@ typedef struct {
   bool profiling;
   uint64_t self_cycles[0x10000];
   uint64_t calls[0x10000];
+  uint64_t pc_cycles[0x10000]; /* self cycles per instruction address */
+  uint64_t pc_count[0x10000];
   uint16_t shadow[256];  /* routine stack: JSR targets and the handler entry */
   unsigned shadow_n;
 } Nes;
@@ -210,6 +212,8 @@ static void dump_nmi(Nes *n, uint64_t entry, unsigned frame, uint64_t cost,
  * routine on top of the shadow stack. */
 static void profile_step(Nes *n, uint8_t op, uint16_t pc, uint64_t cost) {
   if (n->shadow_n == 0) return;
+  n->pc_cycles[pc] += cost;
+  n->pc_count[pc]++;
   n->self_cycles[n->shadow[n->shadow_n - 1]] += cost;
   if (op == 0x20u) { /* JSR: enter the target */
     uint16_t target = (uint16_t)(n->prg[(pc + 1u - 0x8000u) & 0x7fffu] |
@@ -223,6 +227,19 @@ static void profile_step(Nes *n, uint8_t op, uint16_t pc, uint64_t cost) {
 
 static void dump_profile(const Nes *n, const char *prefix) {
   char path[512];
+  snprintf(path, sizeof(path), "%s-pc.csv", prefix);
+  FILE *pcf = fopen(path, "w");
+  if (pcf) {
+    fprintf(pcf, "address,cycles,executions\n");
+    for (unsigned a = 0; a < 0x10000u; a++) {
+      if (n->pc_count[a] != 0) {
+        fprintf(pcf, "%04x,%llu,%llu\n", a,
+                (unsigned long long)n->pc_cycles[a],
+                (unsigned long long)n->pc_count[a]);
+      }
+    }
+    fclose(pcf);
+  }
   snprintf(path, sizeof(path), "%s-routines.csv", prefix);
   FILE *f = fopen(path, "w");
   if (!f) return;
