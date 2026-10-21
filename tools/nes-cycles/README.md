@@ -38,8 +38,9 @@ branch or indexed read adds a penalty. It exits 1 on a violation or an address
 the assembler does not map as an instruction start.
 
 Current result on the five gameplay profiles: 0 addresses below base; 3
-unexplained. 80b3 is a sprite-0 poll site whose wait is charged to the store
-(about 500 cycles per execution). 8222 and e3eb are `.db $2c` BIT-skip entries
+unexplained. 80b3 is `sta SPR_DMA`: it measures 517 cycles per execution in
+every scenario, which is the 4-cycle store plus the 513-cycle OAM DMA stall
+(not a sprite-0 wait). 8222 and e3eb are `.db $2c` BIT-skip entries
 (MoveAllSpritesOffscreen, BlockBufferColli_Head), intentional mid-instruction
 entries that `asm_labels` does not record as instruction starts. Both cost exactly
 the BIT base per execution, so they are not a profiler error (the CSV columns are
