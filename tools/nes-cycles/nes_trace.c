@@ -79,6 +79,8 @@ typedef struct {
 
   /* NES_PROFILE: self cycles and calls per routine, inside NMI handlers */
   bool profiling;
+  FILE *trace_out; /* NES_TRACE_RANGE=lo-hi: per-execution cycles for NMI code in range */
+  unsigned trace_lo, trace_hi;
   uint64_t self_cycles[0x10000];
   uint64_t calls[0x10000];
   uint64_t pc_cycles[0x10000]; /* self cycles per instruction address */
@@ -316,6 +318,11 @@ int main(int argc, char **argv) {
   if (!nes.nmi_out || !nes.ram_out) { fprintf(stderr, "cannot write output\n"); return 1; }
   fprintf(nes.nmi_out, "frame,start,cost,depth\n");
   nes.profiling = getenv("NES_PROFILE") != NULL;
+  if (getenv("NES_TRACE_RANGE")) {
+    sscanf(getenv("NES_TRACE_RANGE"), "%x-%x", &nes.trace_lo, &nes.trace_hi);
+    snprintf(path, sizeof(path), "%s-trace.csv", argv[4]);
+    nes.trace_out = fopen(path, "w");
+  }
   if (nes.profiling) {
     snprintf(path, sizeof(path), "%s-nmi-routines.csv", argv[4]);
     nes.top_out = fopen(path, "w");
@@ -358,6 +365,11 @@ int main(int argc, char **argv) {
       nes.calls[vector]++;
     }
     cpu6502_step(&nes.cpu);
+    if (nes.trace_out && nes.nmi_depth > 0 && !entering_nmi &&
+        pc_before >= nes.trace_lo && pc_before <= nes.trace_hi) {
+      fprintf(nes.trace_out, "%u,%04x,%02x,%llu\n", (unsigned)nes.frame, pc_before,
+              op_before, (unsigned long long)(nes.cpu.cycles - before));
+    }
     if (nes.profiling && (nes.nmi_depth > 0 || entering_nmi)) {
       uint64_t cost = nes.cpu.cycles - before;
       if (entering_nmi) {
