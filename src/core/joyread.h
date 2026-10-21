@@ -8,9 +8,13 @@
 #ifndef SMBC_CORE_JOYREAD_H
 #define SMBC_CORE_JOYREAD_H
 
+#include <stdint.h>
+
 struct Smbc;
 
-/* smb.asm: ReadJoypads — strobe both ports, read eight bits from each. */
-void read_joypads(struct Smbc *smbc);
+/* smb.asm: ReadJoypads — strobe both ports, read eight bits from each.
+ * Returns the cycles of the ROM path taken (the NMI's jsr is charged by the
+ * caller). */
+uint32_t read_joypads(struct Smbc *smbc);
 
 #endif /* SMBC_CORE_JOYREAD_H */

@@ -99,8 +99,7 @@ void nmi_run(Smbc *smbc) {
   ppu_write(ppu, 1, state->ram[SMBC_MIRROR_PPU_CTRL2]);
 
   sound_engine(smbc);           /* smb.asm: SoundEngine */
-  smbc_charge_cycles(smbc, 536u); /* smb.asm: ReadJoypads, no data-dependent path */
-  read_joypads(smbc);
+  smbc_charge_cycles(smbc, 6u + read_joypads(smbc)); /* jsr ReadJoypads */
   pause_routine(smbc);
   smbc_charge_cycles(smbc, 6u + update_top_score(state)); /* jsr UpdateTopScore */
 
