@@ -37,8 +37,8 @@ typedef struct Smbc {
 /* NTSC timing in CPU cycles. A frame is 29780 cycles; the NMI fires at the
  * start of line 241, which the issue measured at 27395 cycles into the frame
  * (smb.asm: NonMaskableInterrupt, issue #41). */
-#define SMBC_CPU_CYCLES_PER_FRAME 29780u
-#define SMBC_CPU_CYCLES_TO_VBLANK 27395u
+#define SMBC_CPU_CYCLES_PER_FRAME SMBC_PPU_FRAME_CYCLES
+#define SMBC_CPU_CYCLES_TO_VBLANK SMBC_PPU_VBLANK_CYCLE
 
 /* Charge CPU cost to the NMI handler that is running. Translated routines
  * call this with their cycle counts; nothing charges yet, so every handler

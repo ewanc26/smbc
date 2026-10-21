@@ -180,7 +180,7 @@ int main(void) {
   ppu_enter_vblank(&ppu);
   ppu_write(&ppu, 5, 0x00u); /* InitScroll: the status bar's (0,0) */
   ppu_write(&ppu, 5, 0x00u);
-  ppu.scanline = 31u;        /* the sprite-0 hit line */
+  ppu.cycle = ppu_line_start(31u); /* the sprite-0 hit line */
   ppu_write(&ppu, 5, 0x08u); /* SkipSprite0: gameplay scroll X=8 */
   ppu_write(&ppu, 5, 0x00u);
   ppu_end_frame(&ppu);
