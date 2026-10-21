@@ -98,7 +98,7 @@ void nmi_run(Smbc *smbc) {
   state->ram[SMBC_VRAM_BUFFER_ADDR_CTRL] = 0x00u;
   ppu_write(ppu, 1, state->ram[SMBC_MIRROR_PPU_CTRL2]);
 
-  sound_engine(smbc);           /* smb.asm: SoundEngine */
+  smbc_charge_cycles(smbc, 6u + sound_engine(smbc)); /* jsr SoundEngine */
   smbc_charge_cycles(smbc, 6u + read_joypads(smbc)); /* jsr ReadJoypads */
   smbc_charge_cycles(smbc, 6u); /* jsr PauseRoutine; its path is charged inside */
   pause_routine(smbc);

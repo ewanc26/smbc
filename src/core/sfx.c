@@ -20,144 +20,174 @@
 
 /* ---- square 1 ------------------------------------------------------------ */
 
-/* smb.asm: DecrementSfx1Length */
-static void decrement_sfx1_length(Smbc *smbc) {
+/* smb.asm: the frequency-register load. Dump_Freq_Regs costs 30 cycles when it
+ * writes the registers and 15 when NoTone skips them (both include the rts). */
+static uint32_t freq_cycles(bool wrote) { return wrote ? 30u : 15u; }
+
+/* smb.asm: DecrementSfx1Length, including the rts; the stop path adds StopSquare1Sfx */
+static uint32_t decrement_sfx1_length(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  if (--st->ram[SMBC_SQU1_SFX_LEN_COUNTER] == 0) {
-    sound_stop_square1_sfx(smbc);
+  if (--st->ram[SMBC_SQU1_SFX_LEN_COUNTER] != 0) {
+    return 15u;
   }
+  sound_stop_square1_sfx(smbc);
+  return 31u;
 }
 
-/* smb.asm: ContinueSndJump */
-static void continue_snd_jump(Smbc *smbc) {
+/* smb.asm: jsr PlaySqu1Sfx (Dump_Squ1_Regs, then SetFreq_Squ1) */
+static uint32_t play_squ1(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
+  return 6u + 22u + freq_cycles(sound_play_squ1_sfx(smbc, a, x, y));
+}
+
+/* smb.asm: ContinueSndJump — the three-part jump envelope, then DecrementSfx1Length */
+static uint32_t continue_snd_jump(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
+  uint32_t cycles = 21u;
   if (a == 0x25u) {
     sound_dump_squ1_regs(smbc, 0x5fu, 0xf6u);
+    cycles = 45u;
   } else if (a == 0x20u) {
     sound_dump_squ1_regs(smbc, 0x48u, 0xbcu); /* smb.asm: FPS2nd */
+    cycles = 47u;
   }
-  decrement_sfx1_length(smbc);
+  return cycles + decrement_sfx1_length(smbc);
 }
 
 /* smb.asm: ContinueBumpThrow */
-static void continue_bump_throw(Smbc *smbc) {
+static uint32_t continue_bump_throw(Smbc *smbc) {
   CoreState *st = &smbc->state;
+  uint32_t cycles = 15u;
   if (st->ram[SMBC_SQU1_SFX_LEN_COUNTER] == 0x06u) {
     apu_write(&smbc->apu, APU_SQUARE1 + 1u, 0xbbu);
+    cycles = 20u;
   }
-  decrement_sfx1_length(smbc);
+  return cycles + decrement_sfx1_length(smbc);
 }
 
 /* smb.asm: ContinueSwimStomp */
-static void continue_swim_stomp(Smbc *smbc) {
+static uint32_t continue_swim_stomp(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
   apu_write(&smbc->apu, APU_SQUARE1, SMBC_SWIM_STOMP_ENVELOPE_DATA[y - 1u]);
+  uint32_t cycles = 20u;
   if (y == 0x06u) {
     apu_write(&smbc->apu, APU_SQUARE1 + 2u, 0x9eu);
+    cycles = 25u;
   }
-  decrement_sfx1_length(smbc);
+  return cycles + decrement_sfx1_length(smbc);
 }
 
 /* smb.asm: ContinueSmackEnemy */
-static void continue_smack_enemy(Smbc *smbc) {
+static uint32_t continue_smack_enemy(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
-  uint8_t a = 0x90u;
   if (y == 0x08u) {
     apu_write(&smbc->apu, APU_SQUARE1 + 2u, 0xa0u);
-    a = 0x9fu;
+    apu_write(&smbc->apu, APU_SQUARE1, 0x9fu);
+    return 23u + decrement_sfx1_length(smbc);
   }
-  apu_write(&smbc->apu, APU_SQUARE1, a);
-  decrement_sfx1_length(smbc);
+  apu_write(&smbc->apu, APU_SQUARE1, 0x90u);
+  return 15u + decrement_sfx1_length(smbc);
 }
 
-/* smb.asm: ContinuePipeDownInj — regs written only when the length counter
- * has d0 and d1 clear and d3 set (the second lsr leaves d3 in bit 1 for the
- * and #%00000010 test). */
-static void continue_pipe_down_inj(Smbc *smbc) {
+/* smb.asm: ContinuePipeDownInj — the gate shifts the length counter twice; the
+ * carry rejects d0 and d1, then d3 is tested through the shifted value. */
+static uint32_t continue_pipe_down_inj(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
-  if ((a & 0x0bu) == 0x08u) {
-    sound_play_squ1_sfx(smbc, 0x44u, 0x9au, 0x91u);
+  uint32_t cycles;
+  if ((a & 0x01u) != 0) {
+    cycles = 9u;
+  } else if ((a & 0x02u) != 0) {
+    cycles = 13u;
+  } else if ((a & 0x08u) == 0) {
+    cycles = 17u;
+  } else {
+    cycles = 16u + 6u + play_squ1(smbc, 0x44u, 0x9au, 0x91u);
   }
-  decrement_sfx1_length(smbc);
+  cycles += 3u; /* jmp DecrementSfx1Length */
+  return cycles + decrement_sfx1_length(smbc);
 }
 
-/* smb.asm: Square1SfxHandler */
-void sfx_square1_handler(Smbc *smbc) {
+/* smb.asm: Square1SfxHandler — the queue dispatch, then CheckSfx1Buffer */
+uint32_t sfx_square1_handler(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = st->ram[SMBC_SQUARE1_SOUND_QUEUE];
   if (y != 0) {
     st->ram[SMBC_SQUARE1_SOUND_BUFFER] = y;
+    uint32_t cycles;
     if ((y & 0x80u) != 0) { /* smb.asm: PlaySmallJump */
-      sound_play_squ1_sfx(smbc, 0x26u, 0x82u, 0xa7u);
+      cycles = 12u + 15u + play_squ1(smbc, 0x26u, 0x82u, 0xa7u);
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x28u;
-      continue_snd_jump(smbc);
-      return;
+      return cycles + continue_snd_jump(smbc);
     }
     if ((y & SMBC_SFX_BIG_JUMP) != 0) { /* smb.asm: PlayBigJump */
-      sound_play_squ1_sfx(smbc, 0x18u, 0x82u, 0xa7u);
+      cycles = 19u + 12u + play_squ1(smbc, 0x18u, 0x82u, 0xa7u);
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x28u;
-      continue_snd_jump(smbc);
-      return;
+      return cycles + continue_snd_jump(smbc);
     }
     if ((y & SMBC_SFX_BUMP) != 0) { /* smb.asm: PlayBump */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0au;
-      sound_play_squ1_sfx(smbc, 0x0cu, 0x9eu, 0x93u);
-      continue_bump_throw(smbc);
-      return;
+      cycles = 26u + 12u + play_squ1(smbc, 0x0cu, 0x9eu, 0x93u);
+      return cycles + continue_bump_throw(smbc);
     }
     if ((y & SMBC_SFX_ENEMY_STOMP) != 0) { /* smb.asm: PlaySwimStomp */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0eu;
-      sound_play_squ1_sfx(smbc, 0x26u, 0x9eu, 0x9cu);
-      continue_swim_stomp(smbc);
-      return;
+      cycles = 32u + 12u + play_squ1(smbc, 0x26u, 0x9eu, 0x9cu);
+      return cycles + continue_swim_stomp(smbc);
     }
     if ((y & SMBC_SFX_ENEMY_SMACK) != 0) { /* smb.asm: PlaySmackEnemy */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0eu;
-      sound_play_squ1_sfx(smbc, 0x28u, 0x9fu, 0xcbu);
-      decrement_sfx1_length(smbc);
-      return;
+      cycles = 39u + 15u + play_squ1(smbc, 0x28u, 0x9fu, 0xcbu);
+      return cycles + decrement_sfx1_length(smbc);
     }
     if ((y & SMBC_SFX_PIPE_DOWN_INJURY) != 0) { /* smb.asm: PlayPipeDownInj */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x2fu;
-      continue_pipe_down_inj(smbc);
-      return;
+      cycles = 46u + 6u;
+      return cycles + continue_pipe_down_inj(smbc);
     }
     if ((y & SMBC_SFX_FIREBALL) != 0) { /* smb.asm: PlayFireballThrow */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x05u;
-      sound_play_squ1_sfx(smbc, 0x0cu, 0x9eu, 0x99u);
-      continue_bump_throw(smbc);
-      return;
+      cycles = 54u + 15u + play_squ1(smbc, 0x0cu, 0x9eu, 0x99u);
+      return cycles + continue_bump_throw(smbc);
     }
     /* smb.asm: PlayFlagpoleSlide */
     st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x40u;
-    sound_set_freq_squ1(smbc, 0x62u);
+    cycles = 61u + 2u + 4u + 2u + 6u + freq_cycles(sound_set_freq_squ1(smbc, 0x62u));
+    cycles += 2u + 3u; /* ldx #$99; bne FPS2nd */
     sound_dump_squ1_regs(smbc, 0x99u, 0xbcu);
-    decrement_sfx1_length(smbc);
-    return;
+    cycles += 2u + 6u + 14u + 3u + 3u + 3u; /* ldy; jsr dump; bne DecJpFPS; bne BranchToDecLength1; bne DecrementSfx1Length */
+    return cycles + decrement_sfx1_length(smbc);
   }
 
   /* smb.asm: CheckSfx1Buffer */
   uint8_t a = st->ram[SMBC_SQUARE1_SOUND_BUFFER];
   if (a == 0) {
-    return; /* smb.asm: ExS1H */
+    return 18u; /* smb.asm: ExS1H */
   }
-  if ((a & 0x81u) != 0) { /* small or big jump */
-    continue_snd_jump(smbc);
-  } else if ((a & (SMBC_SFX_BUMP | SMBC_SFX_FIREBALL)) != 0) {
-    continue_bump_throw(smbc);
-  } else if ((a & SMBC_SFX_ENEMY_STOMP) != 0) {
-    continue_swim_stomp(smbc);
-  } else if ((a & SMBC_SFX_ENEMY_SMACK) != 0) {
-    continue_smack_enemy(smbc);
-  } else if ((a & SMBC_SFX_PIPE_DOWN_INJURY) != 0) {
-    continue_pipe_down_inj(smbc);
-  } else { /* flagpole slide */
-    decrement_sfx1_length(smbc);
+  if ((a & 0x80u) != 0) {
+    return 15u + continue_snd_jump(smbc);
   }
+  if ((a & SMBC_SFX_BIG_JUMP) != 0) {
+    return 22u + continue_snd_jump(smbc);
+  }
+  if ((a & SMBC_SFX_BUMP) != 0) {
+    return 28u + continue_bump_throw(smbc);
+  }
+  if ((a & SMBC_SFX_ENEMY_STOMP) != 0) {
+    return 35u + continue_swim_stomp(smbc);
+  }
+  if ((a & SMBC_SFX_ENEMY_SMACK) != 0) {
+    return 42u + continue_smack_enemy(smbc);
+  }
+  if ((a & SMBC_SFX_PIPE_DOWN_INJURY) != 0) {
+    return 49u + continue_pipe_down_inj(smbc);
+  }
+  if ((a & SMBC_SFX_FIREBALL) != 0) {
+    return 56u + continue_bump_throw(smbc);
+  }
+  return 63u + decrement_sfx1_length(smbc);
 }
 
 /* ---- square 2 ------------------------------------------------------------ */
