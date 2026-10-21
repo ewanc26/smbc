@@ -246,7 +246,8 @@ void update_screen(Smbc *smbc) {
 
 /* smb.asm: TopScoreCheck — six-digit subtraction, lowest digit first; the
  * score is copied only if no borrow survives the final digit. */
-static void top_score_check(CoreState *state, int x) {
+static uint32_t top_score_check(CoreState *state, int x) {
+  uint32_t cycles = 2u + 2u; /* ldy #$05; sec */
   int y = 5;
   int no_borrow = 1; /* sec on entry */
   for (int i = 0; i < 6; i++) {
@@ -255,10 +256,12 @@ static void top_score_check(CoreState *state, int x) {
     no_borrow = diff >= 0;
     x--;
     y--;
+    cycles += 4u + 4u + 2u + 2u + (i < 5 ? 3u : 2u); /* lda; sbc; dex; dey; bpl */
   }
   if (!no_borrow) {
-    return; /* smb.asm: NoTopSc */
+    return cycles + 3u + 6u; /* bcc NoTopSc, taken; rts */
   }
+  cycles += 2u + 2u + 2u; /* bcc, not taken; inx; iny */
   x++;
   y++;
   for (int i = 0; i < 6; i++) {
@@ -266,13 +269,17 @@ static void top_score_check(CoreState *state, int x) {
         state->ram[SMBC_PLAYER_SCORE_DISPLAY + x];
     x++;
     y++;
+    cycles += 4u + 5u + 2u + 2u + 2u + (i < 5 ? 3u : 2u); /* lda; sta; inx; iny; cpy; bcc */
   }
+  return cycles + 6u; /* NoTopSc: rts */
 }
 
-void update_top_score(CoreState *state) {
-  /* smb.asm: UpdateTopScore — mario's score, then luigi's */
-  top_score_check(state, 0x05);
-  top_score_check(state, 0x0b);
+uint32_t update_top_score(CoreState *state) {
+  /* smb.asm: UpdateTopScore — mario's score, then luigi's, falling into TopScoreCheck */
+  uint32_t cycles = 2u + 6u; /* ldx #$05; jsr TopScoreCheck */
+  cycles += top_score_check(state, 0x05);
+  cycles += 2u; /* ldx #$0b */
+  return cycles + top_score_check(state, 0x0b);
 }
 
 void get_player_colors(Smbc *smbc) { get_player_colors_core(&smbc->state); }

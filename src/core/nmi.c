@@ -102,7 +102,7 @@ void nmi_run(Smbc *smbc) {
   smbc_charge_cycles(smbc, 536u); /* smb.asm: ReadJoypads, no data-dependent path */
   read_joypads(smbc);
   pause_routine(smbc);
-  update_top_score(state);
+  smbc_charge_cycles(smbc, 6u + update_top_score(state)); /* jsr UpdateTopScore */
 
   if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) != 0) {
     smbc_charge_cycles(smbc, 4u + 2u + 4u); /* lda GamePauseStatus; lsr; bcs PauseSkip, taken across a page */
