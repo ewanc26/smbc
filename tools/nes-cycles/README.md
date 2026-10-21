@@ -117,15 +117,16 @@ nes-py does not expose.
 
 ## Visual parity (#31): what the pictures show
 
-- **Display offset.** The port's frame *f* matches the emulator's screen at step
-  *f*+1. Game state written in NMI *f* is first drawn in frame *f*+1, so
-  `compare_pictures.py` defaults to offset 1. (The RAM comparisons above use the
-  same index, not offset 1.)
-- With that offset the renderer is pixel-exact wherever the NMI timing agrees:
-  - walk, frames 0–355 (all exact), then 747 of 949 frames overall;
-  - start, 448 of 449 frames (frame 356 differs by 171 pixels);
-  - jump, the same as walk;
-  - demo, frames 0–556.
+- **Display offset.** Before frame 748 the port's frame *f* matches the
+  emulator's screen at step *f*+1 (walk, `emulator_compare.py` offset 1). From
+  frame 748 on, with the absolute raster clock (457ac23), frame *f* matches step
+  *f* instead: walk frame 748 differs by 105 pixels at offset 0 and 10,574 at
+  offset 1; frame 749 by 281 and 10,799. The alignment changes at frame 748
+  because the NMI's post-sprite-0 scroll writes now land one picture later,
+  which is the #41 timing gap. A single fixed offset does not fit the whole run.
+- Exact-frame counts from `emulator_compare.py` at offset 1 are 185 of 950 for
+  walk (the same for HEAD and the working tree). The earlier 747/949 figure was
+  from a different measurement and is withdrawn.
 - **Frame 356** (start and walk): the emulator draws a 171-pixel blue sky line on
   the top row; the port's top row is black. A palette write at the first visible line.
 - **Frame 748 on** (walk, jump): the scroll drifts by a few pixels from frame to
