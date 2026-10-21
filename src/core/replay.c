@@ -51,7 +51,7 @@ uint64_t smbc_state_hash(const Smbc *smbc) {
   h = hash_u8(h, p->latch ? 1u : 0u);
   h = hash_u8(h, p->vblank ? 1u : 0u);
   h = hash_u8(h, p->sprite0 ? 1u : 0u);
-  h = hash_u16(h, p->scanline);
+  h = hash_u16(h, ppu_scanline(p)); /* the cycle is a function of the line for now */
   h = hash_u8(h, p->t_nt);
   h = hash_u8(h, p->scroll_log_len);
   h = hash_bytes(h, p->scroll_log,

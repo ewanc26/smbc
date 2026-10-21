@@ -187,7 +187,8 @@ int main(void) {
    * log, and the status read observes d7 */
   ppu_init(&ppu);
   ppu_enter_vblank(&ppu);
-  assert(ppu.scanline == 241u);
+  assert(ppu_scanline(&ppu) == 241u);
+  assert(ppu.cycle == SMBC_PPU_VBLANK_CYCLE);
   assert((ppu_read(&ppu, 2) & 0x80u) != 0);
   assert(ppu.scroll_log_len == 0);
 
@@ -197,24 +198,25 @@ int main(void) {
   ppu_enter_vblank(&ppu);
   ppu_await_sprite0_clear(&ppu);
   ppu_await_sprite0_set(&ppu, 31);
-  assert(ppu.scanline == 31u);
+  assert(ppu_scanline(&ppu) == 31u);
   assert((ppu_read(&ppu, 2) & 0xc0u) == 0x40u); /* vblank already clear */
   assert((ppu_read(&ppu, 2) & 0x40u) != 0);     /* hit survives the read */
   ppu_await_sprite0_clear(&ppu);                /* the pre-render line */
-  assert(ppu.scanline == 261u);
+  assert(ppu_scanline(&ppu) == 261u);
   assert((ppu_read(&ppu, 2) & 0x40u) == 0);
 
   /* a wait with no overlap runs the visible frame out, flag clear */
   ppu_init(&ppu);
   ppu_await_sprite0_set(&ppu, -1);
-  assert(ppu.scanline == 239u);
+  assert(ppu_scanline(&ppu) == 239u);
   assert((ppu_read(&ppu, 2) & 0x40u) == 0);
 
   /* the frame's end wraps the clock and clears any standing flags */
   ppu_init(&ppu);
   ppu_enter_vblank(&ppu);
   ppu_end_frame(&ppu);
-  assert(ppu.scanline == 0);
+  assert(ppu.cycle == 0u);
+  assert(ppu_scanline(&ppu) == 0);
   assert((ppu_read(&ppu, 2) & 0xc0u) == 0);
 
   /* the scroll log: vblank writes tag at 241, mid-frame writes at the
@@ -238,7 +240,7 @@ int main(void) {
   ppu_write(&ppu, 6, 0x00u);
   assert(ppu.scroll_log_len == 1);
   assert(ppu.scroll_log[0].nt == 0x02u);
-  ppu.scanline = 31u; /* the sprite-0 hit line */
+  ppu.cycle = ppu_line_start(31u); /* the sprite-0 hit line */
   ppu_write(&ppu, 5, 0x40u);
   ppu_write(&ppu, 5, 0x00u);
   assert(ppu.scroll_log_len == 2);
@@ -246,6 +248,23 @@ int main(void) {
   assert(ppu.scroll_log[1].x == 0x40u);
   ppu_enter_vblank(&ppu); /* next frame: the log starts fresh */
   assert(ppu.scroll_log_len == 0);
+
+  /* the clock: scanline starts strictly increase, line 241 begins at the
+   * vblank cycle, and every cycle maps back to the line that contains it */
+  assert(ppu_line_start(0) == 0u);
+  assert(ppu_line_start(SMBC_PPU_VBLANK_SCANLINE) == SMBC_PPU_VBLANK_CYCLE);
+  assert(ppu_line_start(SMBC_PPU_LAST_SCANLINE) < SMBC_PPU_FRAME_CYCLES);
+  for (uint16_t y = 0; y < SMBC_PPU_LAST_SCANLINE; y++) {
+    assert(ppu_line_start((uint16_t)(y + 1u)) > ppu_line_start(y));
+  }
+  for (uint16_t y = 0; y <= SMBC_PPU_LAST_SCANLINE; y++) {
+    ppu.cycle = ppu_line_start(y);
+    assert(ppu_scanline(&ppu) == y);
+    if (y < SMBC_PPU_LAST_SCANLINE) {
+      ppu.cycle = ppu_line_start((uint16_t)(y + 1u)) - 1u;
+      assert(ppu_scanline(&ppu) == y);
+    }
+  }
 
   printf("tests/hw/ppu: ok\n");
   return 0;

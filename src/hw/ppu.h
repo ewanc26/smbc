@@ -37,6 +37,11 @@
 #define SMBC_PPU_VBLANK_SCANLINE 241u /* vblank begins, NMI fires */
 #define SMBC_PPU_LAST_VISIBLE 239u
 
+/* The clock counts CPU cycles. One frame is 29780 of them, and vblank begins
+ * 27395 cycles in (issue #41). */
+#define SMBC_PPU_FRAME_CYCLES 29780u
+#define SMBC_PPU_VBLANK_CYCLE 27395u
+
 /* One scroll record: the raster line the state took effect on and the
  * scroll it selects (the $2005 pair plus t's name-table bits). Writes
  * on the same scanline coalesce into one record — the hardware's
@@ -72,7 +77,8 @@ typedef struct {
   bool latch;         /* $2005/$2006 first/second-write toggle */
   bool vblank;        /* status bit 7, set by the frame loop */
   bool sprite0;       /* status bit 6, driven by the raster clock */
-  uint16_t scanline;  /* virtual raster clock, 0-261 */
+  uint32_t cycle;     /* virtual raster clock: CPU cycles into the frame;
+                       * the scanline is derived with ppu_scanline */
   uint8_t t_nt;       /* t's name-table bits: $2000 d0/d1, or address
                        * bits 10-11 after a completed $2006 pair — kept
                        * apart from ctrl1 because the VRAM address
@@ -101,6 +107,12 @@ void ppu_set_vblank(Ppu *ppu, bool active);
  *    otherwise leave stale state). */
 void ppu_enter_vblank(Ppu *ppu);
 void ppu_end_frame(Ppu *ppu);
+
+/* The cycle at which a scanline begins, and the scanline the clock is on.
+ * Scanline starts strictly increase, and line 241 begins at the vblank
+ * cycle. ppu_scanline is clamped to the pre-render line. */
+uint32_t ppu_line_start(uint16_t line);
+uint16_t ppu_scanline(const Ppu *ppu);
 
 /* Nominate the cartridge's CHR ROM for pattern-table reads. */
 void ppu_set_chr(Ppu *ppu, const uint8_t *chr);
