@@ -25,8 +25,11 @@ Build and run (inputs are one button byte per frame, as in `frame_dump`):
 
 With `NES_PROFILE=1` the run also writes `out-routines.csv`: for each ROM
 address, the self cycles spent in it inside NMI handlers and how many times it
-was entered (JSR or the NMI vector). Addresses are ROM addresses; `smb.asm` has
-labels but no address map, so names have to be matched by hand.
+was entered (JSR or the NMI vector). Addresses are ROM addresses.
+
+`asm_labels.py` gives the address of every `smb.asm` label. It assembles the
+source and checks the result byte for byte against the ROM (0 mismatches for
+the 32 KB PRG). Use `--syms` to list the labels, then join them to the profile.
 
 ## Validation so far
 
