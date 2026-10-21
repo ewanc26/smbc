@@ -31,6 +31,18 @@ was entered (JSR or the NMI vector). Addresses are ROM addresses.
 source and checks the result byte for byte against the ROM (0 mismatches for
 the 32 KB PRG). Use `--syms` to list the labels, then join them to the profile.
 
+`static_costs.py smb.asm <prefix>...` takes each instruction's base cycles from
+the `BASE` table in `cpu6502.c` and checks the `-pc.csv` profiles against it. The
+measured cost per execution must never be below base, and must equal it unless a
+branch or indexed read adds a penalty. It exits 1 on a violation or an address
+the assembler does not map as an instruction start.
+
+Current result on the five gameplay profiles: 0 addresses below base; 3
+unexplained. 80b3 is a sprite-0 poll site whose wait is charged to the store
+(about 500 cycles per execution). 8222 and e3eb hold BIT abs bytes but are not
+instruction starts in `asm_labels`, so the profile may attribute cycles to a
+mid-instruction PC. Resolve this before charging NMI cost from the CPU clock.
+
 ## Validation so far
 
 Against the reference emulator's RAM, on the title and demo scenarios:
