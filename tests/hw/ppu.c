@@ -249,6 +249,22 @@ int main(void) {
   ppu_enter_vblank(&ppu); /* next frame: the log starts fresh */
   assert(ppu.scroll_log_len == 0);
 
+  /* a write past the frame's end (an NMI that overran it) is carried to the
+   * next picture at its wrapped line, ahead of that picture's own NMI writes */
+  ppu_init(&ppu);
+  ppu_enter_vblank(&ppu);
+  ppu.cycle = SMBC_PPU_FRAME_CYCLES + ppu_line_start(31u);
+  ppu_write(&ppu, 5, 0x40u);
+  ppu_write(&ppu, 5, 0x00u);
+  assert(ppu.scroll_log_len == 0);
+  assert(ppu.scroll_carry_len == 1);
+  ppu_end_frame(&ppu);
+  ppu_enter_vblank(&ppu);
+  assert(ppu.scroll_carry_len == 0);
+  assert(ppu.scroll_log_len == 1);
+  assert(ppu.scroll_log[0].scanline == 31u);
+  assert(ppu.scroll_log[0].x == 0x40u);
+
   /* the clock: scanline starts strictly increase, line 241 begins at the
    * vblank cycle, and every cycle maps back to the line that contains it */
   assert(ppu_line_start(0) == 0u);

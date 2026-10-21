@@ -86,6 +86,9 @@ typedef struct {
   PpuScrollPoint scroll_log[SMBC_PPU_SCROLL_LOG]; /* this frame's scroll
                        * writes, in order; reset when vblank begins */
   uint8_t scroll_log_len;
+  PpuScrollPoint scroll_carry[SMBC_PPU_SCROLL_LOG]; /* writes that overran
+                       * the frame, for the next picture (see ppu_log_scroll) */
+  uint8_t scroll_carry_len;
 } Ppu;
 
 void ppu_init(Ppu *ppu);

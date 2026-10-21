@@ -190,6 +190,29 @@ int main(void) {
   assert(fb_at(0, 40) == 0x21u);  /* below the split: scrolled into view */
   assert(fb_at(8, 40) == 0x0fu);
 
+  /* the same split, when the hit's gameplay scroll overran the previous
+   * frame: it still splits this picture at its sprite-0 line */
+  setup(&ppu);
+  for (unsigned r = 0; r < 30u; r++) {
+    ppu.vram[0x2000 + r * 32u + 1] = 0x01u;
+  }
+  solid_tile(1, 1);
+  bg_colour(&ppu, 0, 1, 0x21u);
+  ppu.vram[0x3f00] = 0x0fu;
+  ppu.cycle = SMBC_PPU_FRAME_CYCLES + ppu_line_start(31u);
+  ppu_write(&ppu, 5, 0x08u);
+  ppu_write(&ppu, 5, 0x00u);
+  ppu_end_frame(&ppu);
+  ppu_enter_vblank(&ppu);
+  ppu_write(&ppu, 5, 0x00u);
+  ppu_write(&ppu, 5, 0x00u);
+  ppu_end_frame(&ppu);
+  ppu_render_frame(&ppu, fb, NULL);
+  assert(fb_at(8, 16) == 0x21u);
+  assert(fb_at(0, 16) == 0x0fu);
+  assert(fb_at(0, 40) == 0x21u);
+  assert(fb_at(8, 40) == 0x0fu);
+
   /* ppu_sprite0_hit_scanline: overlap, no overlap, layers disabled */
   setup(&ppu);
   ppu.vram[0x2000 + 32] = 0x01u;
