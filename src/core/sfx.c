@@ -384,64 +384,87 @@ uint32_t sfx_square2_handler(Smbc *smbc) {
 /* ---- noise --------------------------------------------------------------- */
 
 /* smb.asm: PlayNoiseSfx */
-static void play_noise_sfx(Smbc *smbc, uint8_t a, uint8_t x) {
+static uint32_t play_noise_sfx(Smbc *smbc, uint8_t a, uint8_t x) {
   apu_write(&smbc->apu, APU_NOISE, a);
   apu_write(&smbc->apu, APU_NOISE + 2u, x);
   apu_write(&smbc->apu, APU_NOISE + 3u, 0x18u);
+  return 4u + 4u + 2u + 4u; /* sta; stx; lda; sta */
 }
 
-/* smb.asm: DecrementSfx3Length */
-static void decrement_sfx3_length(Smbc *smbc) {
+/* smb.asm: DecrementSfx3Length, through ExSfx3's rts */
+static uint32_t decrement_sfx3_length(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  if (--st->ram[SMBC_NOISE_SFX_LEN_COUNTER] == 0) {
-    apu_write(&smbc->apu, APU_NOISE, 0xf0u);
-    st->ram[SMBC_NOISE_SOUND_BUFFER] = 0x00u;
+  if (--st->ram[SMBC_NOISE_SFX_LEN_COUNTER] != 0) {
+    return 6u + 3u + 6u; /* dec; bne taken; rts */
   }
+  apu_write(&smbc->apu, APU_NOISE, 0xf0u);
+  st->ram[SMBC_NOISE_SOUND_BUFFER] = 0x00u;
+  return 6u + 2u + 2u + 4u + 2u + 3u + 6u; /* dec; bne; lda; sta; lda; sta; rts */
 }
 
 /* smb.asm: ContinueBrickShatter */
-static void continue_brick_shatter(Smbc *smbc) {
+static uint32_t continue_brick_shatter(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_NOISE_SFX_LEN_COUNTER];
+  uint32_t cycles = 4u + 2u; /* lda abs; lsr */
   if ((a & 0x01u) != 0) {
     uint8_t y = a >> 1;
-    play_noise_sfx(smbc, SMBC_BRICK_SHATTER_ENV_DATA[y],
-                   SMBC_BRICK_SHATTER_FREQ_DATA[y]);
+    cycles += 2u + 2u + 4u + 4u; /* bcc not taken; tay; ldx abs,y; lda abs,y */
+    cycles += play_noise_sfx(smbc, SMBC_BRICK_SHATTER_ENV_DATA[y],
+                             SMBC_BRICK_SHATTER_FREQ_DATA[y]);
+  } else {
+    cycles += 3u; /* bcc DecrementSfx3Length, taken */
   }
-  decrement_sfx3_length(smbc);
+  return cycles + decrement_sfx3_length(smbc);
 }
 
-/* smb.asm: ContinueBowserFlame */
-static void continue_bowser_flame(Smbc *smbc) {
+/* smb.asm: ContinueBowserFlame. BowserFlameEnvData-1 is the last byte of
+ * WaterEventMusEnvData, read when the counter is 1 (index 0 here). */
+static uint32_t continue_bowser_flame(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = st->ram[SMBC_NOISE_SFX_LEN_COUNTER] >> 1;
-  play_noise_sfx(smbc, SMBC_BOWSER_FLAME_ENV_DATA[y - 1u], 0x0fu);
-  decrement_sfx3_length(smbc);
+  uint8_t env = y == 0
+      ? SMBC_WATER_EVENT_MUS_ENV_DATA[SMBC_WATER_EVENT_MUS_ENV_DATA_SIZE - 1u]
+      : SMBC_BOWSER_FLAME_ENV_DATA[y - 1u];
+  uint32_t cycles = 4u + 2u + 2u + 2u + 4u + 3u; /* lda; lsr; tay; ldx; lda abs,y; bne taken */
+  return cycles + play_noise_sfx(smbc, env, 0x0fu) + decrement_sfx3_length(smbc);
 }
 
-/* smb.asm: NoiseSfxHandler */
-void sfx_noise_handler(Smbc *smbc) {
+/* smb.asm: NoiseSfxHandler. Returns the cycles of the path taken. */
+uint32_t sfx_noise_handler(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = st->ram[SMBC_NOISE_SOUND_QUEUE];
-  if (y != 0) {
+  uint32_t cycles = 3u; /* ldy NoiseSoundQueue */
+  if (y == 0) {
+    cycles += 3u; /* beq CheckNoiseBuffer, taken */
+  } else {
     st->ram[SMBC_NOISE_SOUND_BUFFER] = y;
+    cycles += 2u + 3u + 5u; /* beq not taken; sty; lsr */
     if ((y & SMBC_SFX_BRICK_SHATTER) != 0) { /* smb.asm: PlayBrickShatter */
       st->ram[SMBC_NOISE_SFX_LEN_COUNTER] = 0x20u;
-      continue_brick_shatter(smbc);
-      return;
+      return cycles + 3u + 2u + 4u + continue_brick_shatter(smbc);
     }
+    cycles += 2u + 5u; /* bcs not taken; lsr */
     if ((y & SMBC_SFX_BOWSER_FLAME) != 0) { /* smb.asm: PlayBowserFlame */
       st->ram[SMBC_NOISE_SFX_LEN_COUNTER] = 0x40u;
-      continue_bowser_flame(smbc);
-      return;
+      return cycles + 3u + 2u + 4u + continue_bowser_flame(smbc);
     }
+    cycles += 2u; /* bcs not taken */
   }
 
   /* smb.asm: CheckNoiseBuffer */
   uint8_t a = st->ram[SMBC_NOISE_SOUND_BUFFER];
-  if ((a & SMBC_SFX_BRICK_SHATTER) != 0) {
-    continue_brick_shatter(smbc);
-  } else if ((a & SMBC_SFX_BOWSER_FLAME) != 0) {
-    continue_bowser_flame(smbc);
+  cycles += 3u; /* lda NoiseSoundBuffer */
+  if (a == 0) {
+    return cycles + 3u + 6u; /* beq ExNH, taken; rts */
   }
+  cycles += 2u + 2u; /* beq not taken; lsr */
+  if ((a & SMBC_SFX_BRICK_SHATTER) != 0) {
+    return cycles + 3u + continue_brick_shatter(smbc);
+  }
+  cycles += 2u + 2u; /* bcs not taken; lsr */
+  if ((a & SMBC_SFX_BOWSER_FLAME) != 0) {
+    return cycles + 3u + continue_bowser_flame(smbc);
+  }
+  return cycles + 2u + 6u; /* bcs not taken; rts */
 }
