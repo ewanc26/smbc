@@ -198,17 +198,23 @@ int main(void) {
   ppu_enter_vblank(&ppu);
   ppu_await_sprite0_clear(&ppu);
   ppu_await_sprite0_set(&ppu, 31);
-  assert(ppu_scanline(&ppu) == 31u);
+  assert(ppu.cycle == SMBC_PPU_FRAME_CYCLES + ppu_line_start(31u));
   assert((ppu_read(&ppu, 2) & 0xc0u) == 0x40u); /* vblank already clear */
   assert((ppu_read(&ppu, 2) & 0x40u) != 0);     /* hit survives the read */
-  ppu_await_sprite0_clear(&ppu);                /* the pre-render line */
-  assert(ppu_scanline(&ppu) == 261u);
+
+  /* the wait never moves the clock backwards: a handler already past the
+   * pre-render line does not wait for the clear */
+  ppu_init(&ppu);
+  ppu_enter_vblank(&ppu);
+  ppu.cycle = SMBC_PPU_FRAME_CYCLES - 1u;
+  ppu_await_sprite0_clear(&ppu);
+  assert(ppu.cycle == SMBC_PPU_FRAME_CYCLES - 1u);
   assert((ppu_read(&ppu, 2) & 0x40u) == 0);
 
   /* a wait with no overlap runs the visible frame out, flag clear */
   ppu_init(&ppu);
   ppu_await_sprite0_set(&ppu, -1);
-  assert(ppu_scanline(&ppu) == 239u);
+  assert(ppu.cycle == SMBC_PPU_FRAME_CYCLES + ppu_line_start(239u));
   assert((ppu_read(&ppu, 2) & 0x40u) == 0);
 
   /* the frame's end wraps the clock and clears any standing flags */

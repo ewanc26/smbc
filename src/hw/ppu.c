@@ -78,21 +78,30 @@ void ppu_await_vblank(Ppu *ppu) {
   ppu->latch = false;
 }
 
+/* A wait never moves the clock backwards: a handler already past the
+ * transition it polls for does not wait at all. */
+static void advance_clock(Ppu *ppu, uint32_t target) {
+  if (ppu->cycle < target) ppu->cycle = target;
+}
+
 void ppu_await_sprite0_clear(Ppu *ppu) {
   /* the hardware clears both flags at the pre-render line */
-  ppu->cycle = ppu_line_start(SMBC_PPU_LAST_SCANLINE);
+  advance_clock(ppu, ppu_line_start(SMBC_PPU_LAST_SCANLINE));
   ppu->sprite0 = false;
   ppu->vblank = false;
 }
 
+/* The hit is in the picture after this frame's pre-render line, so the
+ * target is one whole frame plus the hit line's start. */
 void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline) {
   if (hit_scanline < 0) {
     /* no overlap this frame: the original would spin forever, so the
      * clock just runs out the visible lines with the flag clear */
-    ppu->cycle = ppu_line_start(SMBC_PPU_LAST_VISIBLE);
+    advance_clock(ppu, SMBC_PPU_FRAME_CYCLES + ppu_line_start(SMBC_PPU_LAST_VISIBLE));
+    ppu->sprite0 = false;
     return;
   }
-  ppu->cycle = ppu_line_start((uint16_t)hit_scanline);
+  advance_clock(ppu, SMBC_PPU_FRAME_CYCLES + ppu_line_start((uint16_t)hit_scanline));
   ppu->sprite0 = true;
 }
 
