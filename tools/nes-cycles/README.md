@@ -23,6 +23,11 @@ Build and run (inputs are one button byte per frame, as in `frame_dump`):
        ../../src/hw/apu.c ../../src/data/chr.c
     ./nes_trace /path/to/smb.nes inputs.bin 450 out
 
+With `NES_PROFILE=1` the run also writes `out-routines.csv`: for each ROM
+address, the self cycles spent in it inside NMI handlers and how many times it
+was entered (JSR or the NMI vector). Addresses are ROM addresses; `smb.asm` has
+labels but no address map, so names have to be matched by hand.
+
 ## Validation so far
 
 Against the reference emulator's RAM, on the title and demo scenarios:
