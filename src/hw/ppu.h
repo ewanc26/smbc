@@ -145,12 +145,14 @@ void ppu_oam_dma(Ppu *ppu, const uint8_t *page);
  *    as the original's polling read would observe it;
  *  - ppu_await_sprite0_clear advances to the pre-render line, where
  *    the hardware clears both status flags;
- *  - ppu_await_sprite0_set advances to the sprite-0 hit scanline
- *    supplied by the caller — computed by hw/render from the current
- *    PPU state, keeping the timing layer free of pixel work. When the
- *    caller reports no hit (-1) the clock advances past the visible
- *    frame and the flag stays clear; the original would hang on the
- *    wait, and the game never arranges that. */
+ *  - ppu_await_sprite0_set advances to the sprite-0 hit scanline of
+ *    the picture after the current frame's pre-render line (one whole
+ *    frame on), supplied by the caller — computed by hw/render from
+ *    the current PPU state, keeping the timing layer free of pixel
+ *    work. When the caller reports no hit (-1) the clock advances past
+ *    the visible frame and the flag stays clear; the original would
+ *    hang on the wait, and the game never arranges that.
+ * A wait never moves the clock backwards. */
 void ppu_await_vblank(Ppu *ppu);
 void ppu_await_sprite0_clear(Ppu *ppu);
 void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline);

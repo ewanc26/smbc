@@ -13,12 +13,11 @@ void smbc_init(Smbc *smbc) {
   ppu_set_chr(&smbc->ppu, SMBC_CHR_ROM); /* the donor cartridge's pattern tables */
   apu_init(&smbc->apu);
   smbc->nmi_owed_cycles = 0;
-  smbc->nmi_cycles = 0;
   boot_run(smbc);
 }
 
 void smbc_charge_cycles(Smbc *smbc, uint32_t cycles) {
-  smbc->nmi_cycles += cycles;
+  smbc->ppu.cycle += cycles;
 }
 
 bool nmi_timeline_runs(uint32_t owed) {
@@ -43,9 +42,8 @@ void smbc_frame(Smbc *smbc) {
    * goes) decides how far into the next frame it overruns. */
   uint32_t end;
   if (nmi_timeline_runs(smbc->nmi_owed_cycles)) {
-    smbc->nmi_cycles = 0;
     nmi_run(smbc);
-    end = SMBC_CPU_CYCLES_TO_VBLANK + smbc->nmi_cycles;
+    end = smbc->ppu.cycle; /* the clock, through the handler's charges and waits */
   } else {
     end = smbc->nmi_owed_cycles;
   }

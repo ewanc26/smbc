@@ -65,13 +65,14 @@ int main(void) {
     }
   }
 
-  /* charging accumulates into the running handler's cost */
+  /* charges advance the raster clock; a frame ends at the clock's position */
   {
     Smbc charged;
     smbc_init(&charged);
+    ppu_enter_vblank(&charged.ppu);
     smbc_charge_cycles(&charged, 100u);
     smbc_charge_cycles(&charged, 25u);
-    assert(charged.nmi_cycles == 125u);
+    assert(charged.ppu.cycle == SMBC_PPU_VBLANK_CYCLE + 125u);
   }
 
   printf("tests/core/frame: ok\n");
