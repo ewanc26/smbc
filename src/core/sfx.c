@@ -193,160 +193,192 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
 
 /* ---- square 2 ------------------------------------------------------------ */
 
-/* smb.asm: DecrementSfx2Length */
-static void decrement_sfx2_length(Smbc *smbc) {
+/* smb.asm: jsr PlaySqu2Sfx (Dump_Sq2_Regs, then SetFreq_Squ2 with its bne) */
+static uint32_t play_squ2(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
+  return 6u + 6u + 14u + 2u + 3u + freq_cycles(sound_play_squ2_sfx(smbc, a, x, y));
+}
+
+/* smb.asm: jsr SetFreq_Squ2 */
+static uint32_t set_freq_squ2(Smbc *smbc, uint8_t a) {
+  return 6u + 2u + 3u + freq_cycles(sound_set_freq_squ2(smbc, a));
+}
+
+/* smb.asm: DecrementSfx2Length, including the rts; the stop path adds EmptySfx2Buffer */
+static uint32_t decrement_sfx2_length(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  if (--st->ram[SMBC_SQU2_SFX_LEN_COUNTER] == 0) {
-    /* smb.asm: EmptySfx2Buffer */
-    st->ram[SMBC_SQUARE2_SOUND_BUFFER] = 0x00u;
-    sound_stop_square2_sfx(smbc);
+  if (--st->ram[SMBC_SQU2_SFX_LEN_COUNTER] != 0) {
+    return 15u;
   }
+  /* smb.asm: EmptySfx2Buffer */
+  st->ram[SMBC_SQUARE2_SOUND_BUFFER] = 0x00u;
+  sound_stop_square2_sfx(smbc);
+  return 31u;
 }
 
 /* smb.asm: ContinueCGrabTTick */
-static void continue_cgrab_ttick(Smbc *smbc) {
+static uint32_t continue_cgrab_ttick(Smbc *smbc) {
   CoreState *st = &smbc->state;
+  uint32_t cycles = 12u;
   if (st->ram[SMBC_SQU2_SFX_LEN_COUNTER] == 0x30u) {
     apu_write(&smbc->apu, APU_SQUARE2 + 2u, 0x54u);
+    cycles = 17u;
   }
-  decrement_sfx2_length(smbc);
+  return cycles + decrement_sfx2_length(smbc);
 }
 
-/* smb.asm: ContinueBlast / ContinueBowserFall — shared reg-load tail is
- * PBFRegs; only the trigger lengths and contents differ. */
-static void continue_blast(Smbc *smbc) {
+/* smb.asm: ContinueBlast */
+static uint32_t continue_blast(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  if (st->ram[SMBC_SQU2_SFX_LEN_COUNTER] == 0x18u) {
-    sound_play_squ2_sfx(smbc, 0x18u, 0x9fu, 0x93u);
+  if (st->ram[SMBC_SQU2_SFX_LEN_COUNTER] != 0x18u) {
+    return 9u + decrement_sfx2_length(smbc);
   }
-  decrement_sfx2_length(smbc);
+  uint32_t cycles = 23u + play_squ2(smbc, 0x18u, 0x9fu, 0x93u);
+  return cycles + decrement_sfx2_length(smbc);
 }
 
-static void continue_bowser_fall(Smbc *smbc) {
+/* smb.asm: ContinueBowserFall */
+static uint32_t continue_bowser_fall(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  if (st->ram[SMBC_SQU2_SFX_LEN_COUNTER] == 0x08u) {
-    sound_play_squ2_sfx(smbc, 0x5au, 0x9fu, 0xa4u);
+  if (st->ram[SMBC_SQU2_SFX_LEN_COUNTER] != 0x08u) {
+    return 9u + decrement_sfx2_length(smbc);
   }
-  decrement_sfx2_length(smbc);
+  uint32_t cycles = 17u + play_squ2(smbc, 0x5au, 0x9fu, 0xa4u);
+  return cycles + decrement_sfx2_length(smbc);
 }
 
 /* smb.asm: ContinuePowerUpGrab */
-static void continue_power_up_grab(Smbc *smbc) {
+static uint32_t continue_power_up_grab(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_SQU2_SFX_LEN_COUNTER];
-  if ((a & 0x01u) == 0) { /* alter frequency every other frame */
-    sound_play_squ2_sfx(smbc, SMBC_POWER_UP_GRAB_FREQ_DATA[(a >> 1) - 1u],
-                        0x5du, 0x7fu);
+  if ((a & 0x01u) != 0) { /* alter frequency every other frame */
+    return 9u + decrement_sfx2_length(smbc);
   }
-  decrement_sfx2_length(smbc);
+  uint32_t cycles = 18u + play_squ2(smbc, SMBC_POWER_UP_GRAB_FREQ_DATA[(a >> 1) - 1u],
+                                    0x5du, 0x7fu);
+  return cycles + decrement_sfx2_length(smbc);
 }
 
 /* smb.asm: ContinueExtraLife — new tone only every eight frames */
-static void continue_extra_life(Smbc *smbc) {
+static uint32_t continue_extra_life(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_SQU2_SFX_LEN_COUNTER];
-  if ((a & 0x07u) == 0) {
-    sound_play_squ2_sfx(smbc, SMBC_EXTRA_LIFE_FREQ_DATA[(a >> 3) - 1u],
-                        0x82u, 0x7fu);
+  if ((a & 0x01u) != 0) {
+    return 14u + decrement_sfx2_length(smbc);
   }
-  decrement_sfx2_length(smbc);
+  if ((a & 0x02u) != 0) {
+    return 23u + decrement_sfx2_length(smbc);
+  }
+  if ((a & 0x04u) != 0) {
+    return 32u + decrement_sfx2_length(smbc);
+  }
+  uint32_t cycles = 48u + play_squ2(smbc, SMBC_EXTRA_LIFE_FREQ_DATA[(a >> 3) - 1u],
+                                    0x82u, 0x7fu);
+  return cycles + decrement_sfx2_length(smbc);
 }
 
 /* smb.asm: ContinueGrowItems — secondary counter drives this one; the usual
  * length counter only marks the end. */
-static void continue_grow_items(Smbc *smbc) {
+static uint32_t continue_grow_items(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t y = (uint8_t)(++st->ram[SMBC_SFX_SECONDARY_COUNTER] >> 1);
   if (y == st->ram[SMBC_SQU2_SFX_LEN_COUNTER]) {
     /* smb.asm: StopGrowItems */
     st->ram[SMBC_SQUARE2_SOUND_BUFFER] = 0x00u;
     sound_stop_square2_sfx(smbc);
-    return;
+    return 47u;
   }
   apu_write(&smbc->apu, APU_SQUARE2, 0x9du);
-  sound_set_freq_squ2(smbc, SMBC_PUP_VGROW_FREQ_DATA[y]);
+  /* smb.asm: PUp_VGrow_FreqData sits at $f4f8, so indexes from 8 cross a page */
+  uint32_t cross = y >= 8u ? 1u : 0u;
+  return 36u + cross + set_freq_squ2(smbc, SMBC_PUP_VGROW_FREQ_DATA[y]);
 }
 
-/* smb.asm: Square2SfxHandler */
-void sfx_square2_handler(Smbc *smbc) {
+/* smb.asm: CheckSfx2Buffer — the buffer bits are tested in the ROM's lsr
+ * order, so the first set bit wins. */
+static uint32_t check_sfx2_buffer(Smbc *smbc) {
+  CoreState *st = &smbc->state;
+  uint8_t a = st->ram[SMBC_SQUARE2_SOUND_BUFFER];
+  if (a == 0) {
+    return 3u + 3u + 6u; /* smb.asm: ExS2H */
+  }
+  if ((a & 0x80u) != 0) {
+    return 8u + continue_bowser_fall(smbc);
+  }
+  if ((a & 0x01u) != 0) {
+    return 15u + continue_cgrab_ttick(smbc); /* jmp Cont_CGrab_TTick */
+  }
+  if ((a & 0x02u) != 0) {
+    return 17u + continue_grow_items(smbc);
+  }
+  if ((a & 0x04u) != 0) {
+    return 21u + continue_grow_items(smbc);
+  }
+  if ((a & 0x08u) != 0) {
+    return 24u + continue_blast(smbc);
+  }
+  if ((a & 0x10u) != 0) {
+    return 31u + continue_cgrab_ttick(smbc); /* jmp Cont_CGrab_TTick */
+  }
+  if ((a & 0x20u) != 0) {
+    return 32u + continue_power_up_grab(smbc);
+  }
+  return 36u + continue_extra_life(smbc);
+}
+
+/* smb.asm: Square2SfxHandler. Returns the cycles of the path taken, not
+ * counting the jsr that calls it. */
+uint32_t sfx_square2_handler(Smbc *smbc) {
   CoreState *st = &smbc->state;
 
   /* the 1-up sound is never interrupted by other square 2 sfx */
   if ((st->ram[SMBC_SQUARE2_SOUND_BUFFER] & SMBC_SFX_EXTRA_LIFE) != 0) {
-    continue_extra_life(smbc);
-    return;
+    return 3u + 2u + 3u + continue_extra_life(smbc);
   }
 
   uint8_t y = st->ram[SMBC_SQUARE2_SOUND_QUEUE];
-  if (y != 0) {
-    st->ram[SMBC_SQUARE2_SOUND_BUFFER] = y;
-    if ((y & 0x80u) != 0) { /* smb.asm: PlayBowserFall */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x38u;
-      sound_play_squ2_sfx(smbc, 0x18u, 0x9fu, 0xc4u);
-      decrement_sfx2_length(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_COIN_GRAB) != 0) { /* smb.asm: PlayCoinGrab */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x35u;
-      sound_play_squ2_sfx(smbc, 0x42u, 0x8du, 0x7fu);
-      continue_cgrab_ttick(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_GROW_POWER_UP) != 0) { /* smb.asm: PlayGrowPowerUp */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x10u;
-      apu_write(&smbc->apu, APU_SQUARE2 + 1u, 0x7fu);
-      st->ram[SMBC_SFX_SECONDARY_COUNTER] = 0x00u;
-      continue_grow_items(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_GROW_VINE) != 0) { /* smb.asm: PlayGrowVine */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x20u;
-      apu_write(&smbc->apu, APU_SQUARE2 + 1u, 0x7fu);
-      st->ram[SMBC_SFX_SECONDARY_COUNTER] = 0x00u;
-      continue_grow_items(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_BLAST) != 0) { /* smb.asm: PlayBlast */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x20u;
-      sound_play_squ2_sfx(smbc, 0x5eu, 0x9fu, 0x94u);
-      decrement_sfx2_length(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_TIMER_TICK) != 0) { /* smb.asm: PlayTimerTick */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x06u;
-      sound_play_squ2_sfx(smbc, 0x42u, 0x98u, 0x7fu);
-      continue_cgrab_ttick(smbc);
-      return;
-    }
-    if ((y & SMBC_SFX_POWER_UP_GRAB) != 0) { /* smb.asm: PlayPowerUpGrab */
-      st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x36u;
-      continue_power_up_grab(smbc);
-      return;
-    }
-    /* smb.asm: PlayExtraLife */
-    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x30u;
-    continue_extra_life(smbc);
-    return;
+  if (y == 0) {
+    return 3u + 2u + 2u + 3u + 3u + check_sfx2_buffer(smbc);
   }
-
-  /* smb.asm: CheckSfx2Buffer */
-  uint8_t a = st->ram[SMBC_SQUARE2_SOUND_BUFFER];
-  if (a == 0) {
-    return; /* smb.asm: ExS2H */
+  st->ram[SMBC_SQUARE2_SOUND_BUFFER] = y;
+  if ((y & 0x80u) != 0) { /* smb.asm: PlayBowserFall */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x38u;
+    uint32_t cycles = 18u + play_squ2(smbc, 0x18u, 0x9fu, 0xc4u);
+    return 15u + 3u + cycles + decrement_sfx2_length(smbc);
   }
-  if ((a & 0x80u) != 0) {
-    continue_bowser_fall(smbc);
-  } else if ((a & (SMBC_SFX_COIN_GRAB | SMBC_SFX_TIMER_TICK)) != 0) {
-    continue_cgrab_ttick(smbc);
-  } else if ((a & (SMBC_SFX_GROW_POWER_UP | SMBC_SFX_GROW_VINE)) != 0) {
-    continue_grow_items(smbc);
-  } else if ((a & SMBC_SFX_BLAST) != 0) {
-    continue_blast(smbc);
-  } else if ((a & SMBC_SFX_POWER_UP_GRAB) != 0) {
-    continue_power_up_grab(smbc);
-  } else { /* extra life */
-    continue_extra_life(smbc);
+  if ((y & SMBC_SFX_COIN_GRAB) != 0) { /* smb.asm: PlayCoinGrab */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x35u;
+    uint32_t cycles = 15u + play_squ2(smbc, 0x42u, 0x8du, 0x7fu);
+    return 25u + cycles + continue_cgrab_ttick(smbc);
   }
+  if ((y & SMBC_SFX_GROW_POWER_UP) != 0) { /* smb.asm: PlayGrowPowerUp */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x10u;
+    apu_write(&smbc->apu, APU_SQUARE2 + 1u, 0x7fu);
+    st->ram[SMBC_SFX_SECONDARY_COUNTER] = 0x00u;
+    return 32u + 21u + continue_grow_items(smbc);
+  }
+  if ((y & SMBC_SFX_GROW_VINE) != 0) { /* smb.asm: PlayGrowVine */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x20u;
+    apu_write(&smbc->apu, APU_SQUARE2 + 1u, 0x7fu);
+    st->ram[SMBC_SFX_SECONDARY_COUNTER] = 0x00u;
+    return 40u + 18u + continue_grow_items(smbc);
+  }
+  if ((y & SMBC_SFX_BLAST) != 0) { /* smb.asm: PlayBlast */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x20u;
+    uint32_t cycles = 24u + play_squ2(smbc, 0x5eu, 0x9fu, 0x94u);
+    return 46u + cycles + decrement_sfx2_length(smbc);
+  }
+  if ((y & SMBC_SFX_TIMER_TICK) != 0) { /* smb.asm: PlayTimerTick */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x06u;
+    uint32_t cycles = 12u + play_squ2(smbc, 0x42u, 0x98u, 0x7fu);
+    return 53u + cycles + continue_cgrab_ttick(smbc);
+  }
+  if ((y & SMBC_SFX_POWER_UP_GRAB) != 0) { /* smb.asm: PlayPowerUpGrab */
+    st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x36u;
+    return 60u + 6u + continue_power_up_grab(smbc);
+  }
+  /* smb.asm: PlayExtraLife */
+  st->ram[SMBC_SQU2_SFX_LEN_COUNTER] = 0x30u;
+  return 67u + 6u + continue_extra_life(smbc);
 }
 
 /* ---- noise --------------------------------------------------------------- */

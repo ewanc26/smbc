@@ -174,8 +174,7 @@ uint32_t sound_engine(Smbc *smbc) {
       st->ram[SMBC_PAUSE_SOUND_QUEUE] == 0x01u) {
     pause_sound(smbc);
   } else {
-    cycles = sfx_square1_handler(smbc);
-    sfx_square2_handler(smbc);
+    cycles = sfx_square1_handler(smbc) + sfx_square2_handler(smbc);
     sfx_noise_handler(smbc);
     sound_music_handler(smbc);
     st->ram[SMBC_AREA_MUSIC_QUEUE] = 0x00u;
