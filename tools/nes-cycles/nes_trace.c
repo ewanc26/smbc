@@ -85,6 +85,12 @@ typedef struct {
   uint64_t pc_count[0x10000];
   uint16_t shadow[256];  /* routine stack: JSR targets and the handler entry */
   unsigned shadow_n;
+  /* NES_PROFILE: cycles per top-level routine (called straight from the
+   * handler body, callees included) for the NMI in progress */
+  uint16_t top_addr[64];
+  uint64_t top_cycles[64];
+  unsigned top_n;
+  FILE *top_out;
 } Nes;
 
 static Nes nes;
@@ -210,8 +216,23 @@ static void dump_nmi(Nes *n, uint64_t entry, unsigned frame, uint64_t cost,
 
 /* Attribute the cycles of one instruction executed inside a handler to the
  * routine on top of the shadow stack. */
+static void add_top(Nes *n, uint16_t addr, uint64_t cost) {
+  for (unsigned i = 0; i < n->top_n; i++) {
+    if (n->top_addr[i] == addr) {
+      n->top_cycles[i] += cost;
+      return;
+    }
+  }
+  if (n->top_n < 64) {
+    n->top_addr[n->top_n] = addr;
+    n->top_cycles[n->top_n++] = cost;
+  }
+}
+
 static void profile_step(Nes *n, uint8_t op, uint16_t pc, uint64_t cost) {
   if (n->shadow_n == 0) return;
+  if (n->shadow_n >= 2) add_top(n, n->shadow[1], cost); /* inclusive of callees */
+  else if (n->shadow_n == 1) add_top(n, n->shadow[0], cost);
   n->pc_cycles[pc] += cost;
   n->pc_count[pc]++;
   n->self_cycles[n->shadow[n->shadow_n - 1]] += cost;
@@ -295,6 +316,11 @@ int main(int argc, char **argv) {
   if (!nes.nmi_out || !nes.ram_out) { fprintf(stderr, "cannot write output\n"); return 1; }
   fprintf(nes.nmi_out, "frame,start,cost,depth\n");
   nes.profiling = getenv("NES_PROFILE") != NULL;
+  if (nes.profiling) {
+    snprintf(path, sizeof(path), "%s-nmi-routines.csv", argv[4]);
+    nes.top_out = fopen(path, "w");
+    if (nes.top_out) fprintf(nes.top_out, "frame,routine,cycles\n");
+  }
 
   nes.frame_len = FRAME_CYCLES;
 #ifdef FRAME_ALTERNATE
@@ -326,6 +352,7 @@ int main(int argc, char **argv) {
     uint8_t op_before = nes.prg[(pc_before - 0x8000u) & 0x7fffu];
     if (entering_nmi && nes.profiling) {
       nes.shadow_n = 0;
+      nes.top_n = 0;
       uint16_t vector = (uint16_t)(nes.prg[0x7ffau] | (nes.prg[0x7ffbu] << 8));
       nes.shadow[nes.shadow_n++] = vector;
       nes.calls[vector]++;
@@ -339,7 +366,16 @@ int main(int argc, char **argv) {
         profile_step(&nes, op_before, pc_before, cost);
       }
     }
-    if (leaving_nmi) nes.shadow_n = 0;
+    if (leaving_nmi) {
+      if (nes.profiling && nes.top_out) {
+        for (unsigned i = 0; i < nes.top_n; i++) {
+          fprintf(nes.top_out, "%llu,%04x,%llu\n", (unsigned long long)nes.frame,
+                  nes.top_addr[i], (unsigned long long)nes.top_cycles[i]);
+        }
+      }
+      nes.top_n = 0;
+      nes.shadow_n = 0;
+    }
     if (nes.cpu.jammed) {
       fprintf(stderr, "illegal opcode %02x at %04x (frame %llu)\n",
               nes.cpu.jam_opcode, nes.cpu.jam_pc,
@@ -359,6 +395,7 @@ int main(int argc, char **argv) {
     }
   }
   if (nes.profiling) dump_profile(&nes, argv[4]);
+  if (nes.top_out) fclose(nes.top_out);
   fclose(nes.nmi_out);
   fclose(nes.ram_out);
   if (nes.fb_out) fclose(nes.fb_out);
