@@ -40,11 +40,14 @@ static uint32_t dec_timers(CoreState *state) {
 
 /* smb.asm: the rotate at PauseSkip — 7-byte LFSR from PseudoRandomBitReg,
  * fed by d1 of byte 0 XOR d1 of byte 1. */
-static void rotate_pseudo_random(CoreState *state) {
+static uint32_t rotate_pseudo_random(CoreState *state) {
+  /* ldx; ldy; lda abs; and; sta $00; lda abs; and; eor $00; clc */
+  uint32_t cycles = 2u + 2u + 4u + 2u + 3u + 4u + 2u + 3u + 2u;
   uint8_t carry =
       (uint8_t)(((state->ram[SMBC_PSEUDO_RANDOM_BIT_REG] ^
                   state->ram[SMBC_PSEUDO_RANDOM_BIT_REG + 1]) &
                  0x02u) != 0);
+  cycles += carry ? 2u + 2u /* beq not taken; sec */ : 3u /* beq taken */;
   for (int i = 0; i < 7; i++) {
     uint8_t v = state->ram[SMBC_PSEUDO_RANDOM_BIT_REG + i];
     uint8_t next_carry = v & 0x01u;
@@ -52,6 +55,8 @@ static void rotate_pseudo_random(CoreState *state) {
         (uint8_t)((v >> 1) | (carry << 7));
     carry = next_carry;
   }
+  cycles += 7u * (7u + 2u + 2u) + 6u * 3u + 2u; /* ror abs,x; inx; dey; bne */
+  return cycles;
 }
 
 void nmi_run(Smbc *smbc) {
@@ -117,7 +122,9 @@ void nmi_run(Smbc *smbc) {
     smbc_charge_cycles(smbc, cycles + 5u); /* inc FrameCounter */
   }
 
-  rotate_pseudo_random(state);  /* smb.asm: PauseSkip */
+  /* smb.asm: PauseSkip, then the sprite-0 flag test (lda abs; beq taken when zero) */
+  smbc_charge_cycles(smbc, rotate_pseudo_random(state) + 4u +
+                               (state->ram[SMBC_SPRITE0_HIT_FLAG] != 0 ? 2u : 3u));
 
   if (state->ram[SMBC_SPRITE0_HIT_FLAG] != 0) {
     ppu_await_sprite0_clear(ppu); /* smb.asm: Sprite0Clr */
