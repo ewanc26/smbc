@@ -163,6 +163,14 @@ static uint8_t source_byte(const CoreState *state, const uint8_t *rom,
   return state->ram[(uint16_t)(pos + y)];
 }
 
+/* smb.asm: OutputToVRAM — X counts down from the length, so length 0 runs
+ * 256 iterations. Repeat mode is 16 cycles per byte, otherwise 17; each
+ * taken bne back to the loop top adds one cycle except the last. */
+static uint32_t vram_loop_cycles(uint8_t length, bool repeat) {
+  uint32_t n = length == 0 ? 256u : length;
+  return n * (repeat ? 16u : 17u) + (n - 1u);
+}
+
 void update_screen(Smbc *smbc) {
   /* smb.asm: UpdateScreen */
   CoreState *state = &smbc->state;
@@ -182,6 +190,7 @@ void update_screen(Smbc *smbc) {
   }
 
   uint8_t first = source_byte(state, rom, pos, 0);
+  uint32_t cycles = 13u + (first != 0 ? 1u : 0u); /* UpdateScreen entry check */
   while (first != 0) {
     /* smb.asm: WriteBufferToScreen — one update set:
      *   byte 1-2: VRAM address, high then low
@@ -201,10 +210,13 @@ void update_screen(Smbc *smbc) {
 
     bool repeat = (third & 0x40u) != 0; /* d6 of the third byte */
     uint8_t length = (uint8_t)(third & 0x3fu);
+    cycles += 103u + ((third & 0x80u) != 0 ? 3u : 4u) + (repeat ? 6u : 3u) +
+              vram_loop_cycles(length, repeat);
     if (repeat) {
       y++; /* smb.asm: ora #%00000010; iny */
     }
-    for (; length != 0; length--) {
+    unsigned count = length == 0 ? 256u : length;
+    for (unsigned i = 0; i < count; i++) {
       /* smb.asm: OutputToVRAM — repeat mode holds Y on the data byte */
       if (!repeat) {
         y++;
@@ -225,7 +237,10 @@ void update_screen(Smbc *smbc) {
     ppu_write(ppu, 6, 0x00u);
     ppu_write(ppu, 6, 0x00u);
     first = source_byte(state, rom, pos, 0);
+    cycles += 13u + (first != 0 ? 1u : 0u);
   }
+  cycles += 14u; /* smb.asm: InitScroll body, reached by falling through */
+  smbc_charge_cycles(smbc, cycles);
   init_scroll(smbc, first); /* smb.asm: falls through to InitScroll, A=0 */
 }
 
