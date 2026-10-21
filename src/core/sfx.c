@@ -149,15 +149,16 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
     }
     if ((y & SMBC_SFX_FIREBALL) != 0) { /* smb.asm: PlayFireballThrow */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x05u;
-      cycles = 54u + 15u + play_squ1(smbc, 0x0cu, 0x9eu, 0x99u);
+      cycles = 54u + 16u + play_squ1(smbc, 0x0cu, 0x9eu, 0x99u);
       return cycles + continue_bump_throw(smbc);
     }
     /* smb.asm: PlayFlagpoleSlide */
     st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x40u;
-    cycles = 61u + 2u + 4u + 2u + 6u + freq_cycles(sound_set_freq_squ1(smbc, 0x62u));
+    cycles = 61u + 2u + 4u + 2u + 6u + 2u /* ldx #$00 in SetFreq_Squ1 */ +
+             freq_cycles(sound_set_freq_squ1(smbc, 0x62u));
     cycles += 2u + 3u; /* ldx #$99; bne FPS2nd */
     sound_dump_squ1_regs(smbc, 0x99u, 0xbcu);
-    cycles += 2u + 6u + 14u + 3u + 3u + 3u; /* ldy; jsr dump; bne DecJpFPS; bne BranchToDecLength1; bne DecrementSfx1Length */
+    cycles += 2u + 6u + 14u + 4u + 3u + 3u; /* ldy; jsr dump; bne DecJpFPS, taken across a page; bne BranchToDecLength1; bne DecrementSfx1Length */
     return cycles + decrement_sfx1_length(smbc);
   }
 
@@ -170,24 +171,24 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
     return 15u + continue_snd_jump(smbc);
   }
   if ((a & SMBC_SFX_BIG_JUMP) != 0) {
-    return 22u + continue_snd_jump(smbc);
+    return 19u + continue_snd_jump(smbc);
   }
   if ((a & SMBC_SFX_BUMP) != 0) {
-    return 28u + continue_bump_throw(smbc);
+    return 22u + continue_bump_throw(smbc);
   }
   if ((a & SMBC_SFX_ENEMY_STOMP) != 0) {
-    return 35u + continue_swim_stomp(smbc);
+    return 26u + continue_swim_stomp(smbc);
   }
   if ((a & SMBC_SFX_ENEMY_SMACK) != 0) {
-    return 42u + continue_smack_enemy(smbc);
+    return 30u + continue_smack_enemy(smbc);
   }
   if ((a & SMBC_SFX_PIPE_DOWN_INJURY) != 0) {
-    return 49u + continue_pipe_down_inj(smbc);
+    return 34u + continue_pipe_down_inj(smbc);
   }
   if ((a & SMBC_SFX_FIREBALL) != 0) {
-    return 56u + continue_bump_throw(smbc);
+    return 38u + continue_bump_throw(smbc);
   }
-  return 63u + decrement_sfx1_length(smbc);
+  return 42u + decrement_sfx1_length(smbc);
 }
 
 /* ---- square 2 ------------------------------------------------------------ */

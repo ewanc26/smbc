@@ -39,8 +39,8 @@ bool sound_dump_freq_regs(Smbc *smbc, uint8_t x, uint8_t a) {
 
 /* smb.asm: Dump_Squ1_Regs */
 void sound_dump_squ1_regs(Smbc *smbc, uint8_t x, uint8_t y) {
-  apu_write(&smbc->apu, 0x4000u, x);
   apu_write(&smbc->apu, 0x4001u, y);
+  apu_write(&smbc->apu, 0x4000u, x);
 }
 
 /* smb.asm: Dump_Sq2_Regs */
