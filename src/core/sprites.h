@@ -16,6 +16,6 @@ void move_sprites_offscreen(CoreState *state);
 
 /* smb.asm: SpriteShuffler — rotates the sprite data offsets by the amounts
  * in SprShuffleAmt (RAM, seeded by SecondaryGameSetup, still pending). */
-void sprite_shuffler(CoreState *state);
+uint32_t sprite_shuffler(CoreState *state);
 
 #endif /* SMBC_CORE_SPRITES_H */

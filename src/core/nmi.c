@@ -130,7 +130,7 @@ void nmi_run(Smbc *smbc) {
     ppu_await_sprite0_clear(ppu); /* smb.asm: Sprite0Clr */
     if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) == 0) {
       move_sprites_offscreen(state);
-      sprite_shuffler(state);
+      smbc_charge_cycles(smbc, 6u + sprite_shuffler(state)); /* jsr SpriteShuffler */
     }
     /* smb.asm: Sprite0Hit — the render layer evaluates the overlap, the
      * timing layer advances the raster clock to it */
