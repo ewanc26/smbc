@@ -49,6 +49,7 @@ class Asm:
     def __init__(self, text):
         self.lines = text.splitlines()
         self.syms = {}
+        self.insns = {}  # address -> (mnemonic, mode, opcode), final pass only
 
     def clean(self, line):
         out, quote = [], False
@@ -220,6 +221,8 @@ class Asm:
                 elif mode in ABS_FALLBACK and ABS_FALLBACK[mode] in table:
                     mode = ABS_FALLBACK[mode]
             op = table[mode]
+            if final:
+                self.insns[addr] = (mn, mode, op)
             if mode == 'rel':
                 n = 2
                 emitted[addr] = op
@@ -248,11 +251,12 @@ def build(path):
         if not changed:
             break
     emitted, _ = a.assemble(final=True)
-    return a.syms, emitted
+    return a, emitted
 
 
 if __name__ == '__main__':
-    syms, emitted = build(sys.argv[1])
+    asm, emitted = build(sys.argv[1])
+    syms = asm.syms
     rom = open(sys.argv[2], 'rb').read()[16:16 + 0x8000]
     bad = [a for a in emitted if 0x8000 <= a < 0x10000 and emitted[a] != rom[a - 0x8000]]
     print('emitted', len(emitted), 'bytes; mismatches', len(bad))
