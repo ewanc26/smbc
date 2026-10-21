@@ -27,19 +27,29 @@ uint32_t ppu_line_start(uint16_t line) {
              (SMBC_PPU_FRAME_CYCLES - SMBC_PPU_VBLANK_CYCLE) / vblank_lines;
 }
 
-uint16_t ppu_scanline(const Ppu *ppu) {
+static uint16_t line_of(uint32_t cycle) {
   uint16_t line = 0;
   while (line < SMBC_PPU_LAST_SCANLINE &&
-         ppu_line_start((uint16_t)(line + 1u)) <= ppu->cycle) {
+         ppu_line_start((uint16_t)(line + 1u)) <= cycle) {
     line++;
   }
   return line;
 }
 
+uint16_t ppu_scanline(const Ppu *ppu) {
+  return line_of(ppu->cycle);
+}
+
 void ppu_enter_vblank(Ppu *ppu) {
   ppu->cycle = ppu_line_start(SMBC_PPU_VBLANK_SCANLINE);
   ppu->vblank = true;
-  ppu->scroll_log_len = 0; /* the NMI prepares the frame's scroll fresh */
+  /* the NMI prepares the frame's scroll fresh; writes that overran the
+   * previous frame belong to this picture, ahead of the NMI's own */
+  ppu->scroll_log_len = ppu->scroll_carry_len;
+  for (uint8_t i = 0; i < ppu->scroll_carry_len; i++) {
+    ppu->scroll_log[i] = ppu->scroll_carry[i];
+  }
+  ppu->scroll_carry_len = 0;
 }
 
 void ppu_end_frame(Ppu *ppu) {
@@ -96,20 +106,31 @@ void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline) {
  * write_ppu_reg1 with the gameplay table selected. (The $2006 coarse
  * x/y effect on the reload is not modelled: the game always
  * re-establishes the scroll through $2005 before the frame renders.) */
-static void ppu_log_scroll(Ppu *ppu) {
+static void scroll_point(PpuScrollPoint *log, uint8_t *len, uint16_t line,
+                         const Ppu *ppu) {
   PpuScrollPoint *point;
-  uint16_t line = ppu_scanline(ppu);
-  if (ppu->scroll_log_len > 0 &&
-      ppu->scroll_log[ppu->scroll_log_len - 1].scanline == line) {
-    point = &ppu->scroll_log[ppu->scroll_log_len - 1]; /* coalesce */
+  if (*len > 0 && log[*len - 1].scanline == line) {
+    point = &log[*len - 1]; /* coalesce */
   } else {
-    if (ppu->scroll_log_len >= SMBC_PPU_SCROLL_LOG) return;
-    point = &ppu->scroll_log[ppu->scroll_log_len++];
+    if (*len >= SMBC_PPU_SCROLL_LOG) return;
+    point = &log[(*len)++];
     point->scanline = line;
   }
   point->x = ppu->scroll_x;
   point->y = ppu->scroll_y;
   point->nt = ppu->t_nt;
+}
+
+/* A write past the frame's end (an NMI that overran it) belongs to the next
+ * picture at its wrapped line: it is carried over, not logged here. */
+static void ppu_log_scroll(Ppu *ppu) {
+  if (ppu->cycle >= SMBC_PPU_FRAME_CYCLES) {
+    scroll_point(ppu->scroll_carry, &ppu->scroll_carry_len,
+                 line_of(ppu->cycle - SMBC_PPU_FRAME_CYCLES), ppu);
+  } else {
+    scroll_point(ppu->scroll_log, &ppu->scroll_log_len, line_of(ppu->cycle),
+                 ppu);
+  }
 }
 
 /* $2007 increment shared by reads and writes: d2 of $2000 selects 32. */
