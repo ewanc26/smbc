@@ -74,11 +74,12 @@ static void continue_smack_enemy(Smbc *smbc) {
 }
 
 /* smb.asm: ContinuePipeDownInj — regs written only when the length counter
- * has d0 and d1 clear and d2 set. */
+ * has d0 and d1 clear and d3 set (the second lsr leaves d3 in bit 1 for the
+ * and #%00000010 test). */
 static void continue_pipe_down_inj(Smbc *smbc) {
   CoreState *st = &smbc->state;
   uint8_t a = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
-  if ((a & 0x07u) == 0x04u) {
+  if ((a & 0x0bu) == 0x08u) {
     sound_play_squ1_sfx(smbc, 0x44u, 0x9au, 0x91u);
   }
   decrement_sfx1_length(smbc);
