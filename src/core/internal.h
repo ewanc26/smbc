@@ -46,7 +46,7 @@ void sound_stop_square2_sfx(Smbc *smbc);
  * run_sound_subroutines. */
 uint32_t sfx_square1_handler(Smbc *smbc);
 uint32_t sfx_square2_handler(Smbc *smbc);
-void sfx_noise_handler(Smbc *smbc);
+uint32_t sfx_noise_handler(Smbc *smbc);
 
 /* core/music.c — smb.asm: MusicHandler */
 void sound_music_handler(Smbc *smbc);
