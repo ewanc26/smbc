@@ -12,10 +12,13 @@
 #ifndef SMBC_CORE_SOUND_H
 #define SMBC_CORE_SOUND_H
 
+#include <stdint.h>
+
 struct Smbc;
 
-/* smb.asm: SoundEngine — one frame of sound processing. */
-void sound_engine(struct Smbc *smbc);
+/* smb.asm: SoundEngine — one frame of sound processing. Returns the CPU
+ * cycles charged so far for the path taken. */
+uint32_t sound_engine(struct Smbc *smbc);
 
 /* smb.asm: square 1 sound queue bits (Sfx_*) */
 #define SMBC_SFX_SMALL_JUMP       0x80u /* smb.asm: Sfx_SmallJump */

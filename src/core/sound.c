@@ -156,23 +156,25 @@ static void skip_sound_subroutines(Smbc *smbc) {
   apu_write(&smbc->apu, 0x4011u, y);
 }
 
-/* smb.asm: SoundEngine */
-void sound_engine(Smbc *smbc) {
+/* smb.asm: SoundEngine. Returns the cycles of the square 1 path only; the
+ * other channels, music, pause and skip paths are not yet charged. */
+uint32_t sound_engine(Smbc *smbc) {
   CoreState *st = &smbc->state;
 
   uint8_t mode = st->ram[SMBC_OPER_MODE];
   if (mode == 0) { /* title screen: disable sound and leave */
     apu_write(&smbc->apu, 0x4015u, mode);
-    return;
+    return 0;
   }
   apu_write(&smbc->apu, 0x4017u, 0xffu);
   apu_write(&smbc->apu, 0x4015u, 0x0fu);
 
+  uint32_t cycles = 0;
   if (st->ram[SMBC_PAUSE_MODE_FLAG] != 0 ||
       st->ram[SMBC_PAUSE_SOUND_QUEUE] == 0x01u) {
     pause_sound(smbc);
   } else {
-    sfx_square1_handler(smbc);
+    cycles = sfx_square1_handler(smbc);
     sfx_square2_handler(smbc);
     sfx_noise_handler(smbc);
     sound_music_handler(smbc);
@@ -181,4 +183,5 @@ void sound_engine(Smbc *smbc) {
   }
 
   skip_sound_subroutines(smbc);
+  return cycles;
 }
