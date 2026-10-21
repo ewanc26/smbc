@@ -48,6 +48,12 @@ void nmi_run(Smbc *smbc) {
   CoreState *state = &smbc->state;
   Ppu *ppu = &smbc->ppu;
 
+  /* the straight-line prefix to the UpdateScreen call (90), InitScroll's
+   * body (14), the sprite DMA stall (513, measured in every ROM NMI), and
+   * the taken bne ScreenOff (+1) */
+  smbc_charge_cycles(smbc, 90u + 14u + 513u +
+                               (state->ram[SMBC_DISABLE_SCREEN_FLAG] != 0 ? 1u : 0u));
+
   uint8_t mirror1 = (uint8_t)(state->ram[SMBC_MIRROR_PPU_CTRL1] & 0x7fu);
   state->ram[SMBC_MIRROR_PPU_CTRL1] = mirror1;   /* NMIs off in the mirror */
   ppu_write(ppu, 0, (uint8_t)(mirror1 & 0x7eu)); /* name table $2000 */
