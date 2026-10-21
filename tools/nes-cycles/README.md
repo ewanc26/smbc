@@ -39,9 +39,11 @@ the assembler does not map as an instruction start.
 
 Current result on the five gameplay profiles: 0 addresses below base; 3
 unexplained. 80b3 is a sprite-0 poll site whose wait is charged to the store
-(about 500 cycles per execution). 8222 and e3eb hold BIT abs bytes but are not
-instruction starts in `asm_labels`, so the profile may attribute cycles to a
-mid-instruction PC. Resolve this before charging NMI cost from the CPU clock.
+(about 500 cycles per execution). 8222 and e3eb are `.db $2c` BIT-skip entries
+(MoveAllSpritesOffscreen, BlockBufferColli_Head), intentional mid-instruction
+entries that `asm_labels` does not record as instruction starts. 8222 is the
+anomaly: 1 cycle over 4 executions, below the BIT base of 4, so its cost
+attribution in the profile is wrong. Resolve before charging NMI cost from the CPU clock.
 
 ## Validation so far
 
