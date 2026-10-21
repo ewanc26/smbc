@@ -100,6 +100,7 @@ void nmi_run(Smbc *smbc) {
 
   sound_engine(smbc);           /* smb.asm: SoundEngine */
   smbc_charge_cycles(smbc, 6u + read_joypads(smbc)); /* jsr ReadJoypads */
+  smbc_charge_cycles(smbc, 6u); /* jsr PauseRoutine; its path is charged inside */
   pause_routine(smbc);
   smbc_charge_cycles(smbc, 6u + update_top_score(state)); /* jsr UpdateTopScore */
 
