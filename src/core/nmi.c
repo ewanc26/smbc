@@ -12,19 +12,30 @@
 #include "state.h"
 
 /* smb.asm: DecTimers — frame timers always; interval timers too when the
- * interval control expires (and it then re-arms at $14). */
-static void dec_timers(CoreState *state) {
+ * interval control expires (and it then re-arms at $14). Returns the cycles
+ * of the path taken; no branch here crosses a page. */
+static uint32_t dec_timers(CoreState *state) {
+  uint32_t cycles = 2u + 6u; /* ldx #$14; dec IntervalTimerControl */
   int end = 0x14;
   state->ram[SMBC_INTERVAL_TIMER_CONTROL]--;
   if ((int8_t)state->ram[SMBC_INTERVAL_TIMER_CONTROL] < 0) {
+    cycles += 2u + 2u + 4u + 2u; /* bpl, not taken; lda #$14; sta; ldx #$23 */
     state->ram[SMBC_INTERVAL_TIMER_CONTROL] = 0x14u;
     end = 0x23;
+  } else {
+    cycles += 3u; /* bpl DecTimersLoop, taken */
   }
   for (int x = end; x >= 0; x--) {
-    if (state->ram[SMBC_TIMERS + x] != 0) {
+    cycles += 4u; /* lda Timers,x */
+    if (state->ram[SMBC_TIMERS + x] == 0) {
+      cycles += 3u; /* beq SkipExpTimer, taken */
+    } else {
       state->ram[SMBC_TIMERS + x]--;
+      cycles += 2u + 7u; /* beq, not taken; dec Timers,x */
     }
+    cycles += 2u + (x > 0 ? 3u : 2u); /* dex; bpl */
   }
+  return cycles;
 }
 
 /* smb.asm: the rotate at PauseSkip — 7-byte LFSR from PseudoRandomBitReg,
@@ -88,12 +99,22 @@ void nmi_run(Smbc *smbc) {
   pause_routine(smbc);
   update_top_score(state);
 
-  if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) == 0) {
-    uint8_t control = state->ram[SMBC_TIMER_CONTROL];
-    if (control == 0 || --state->ram[SMBC_TIMER_CONTROL] == 0) {
-      dec_timers(state);
+  if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) != 0) {
+    smbc_charge_cycles(smbc, 4u + 2u + 4u); /* lda GamePauseStatus; lsr; bcs PauseSkip, taken across a page */
+  } else {
+    uint32_t cycles = 4u + 2u + 2u + 4u; /* lda GamePauseStatus; lsr; bcs; lda TimerControl */
+    if (state->ram[SMBC_TIMER_CONTROL] == 0) {
+      cycles += 4u + dec_timers(state); /* beq DecTimers, taken across a page */
+    } else {
+      cycles += 2u + 6u; /* beq, not taken; dec TimerControl */
+      if (--state->ram[SMBC_TIMER_CONTROL] == 0) {
+        cycles += 2u + dec_timers(state); /* bne, not taken */
+      } else {
+        cycles += 3u; /* bne NoDecTimers, taken */
+      }
     }
     state->ram[SMBC_FRAME_COUNTER]++; /* smb.asm: NoDecTimers */
+    smbc_charge_cycles(smbc, cycles + 5u); /* inc FrameCounter */
   }
 
   rotate_pseudo_random(state);  /* smb.asm: PauseSkip */
