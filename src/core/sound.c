@@ -13,21 +13,47 @@
 #include "internal.h"
 #include "state.h"
 
-/* smb.asm: FreqRegLookupTbl immediately followed in ROM by
- * MusicLengthLookupTbl, so an index of 102..149 reads the length table. */
+/* smb.asm: FreqRegLookupTbl is followed in ROM by MusicLengthLookupTbl, the
+ * envelope tables, and the interrupt vectors at $FFFA, so the indexed reads
+ * in Dump_Freq_Regs run on through all of them. */
+static const uint8_t VECTOR_TBL[6] = {0x82u, 0x80u, 0x00u, 0x80u, 0xf0u, 0xffu};
+
 uint8_t sound_freq_lookup(uint8_t index) {
-  if (index < SMBC_FREQ_REG_LOOKUP_TBL_SIZE) {
-    return SMBC_FREQ_REG_LOOKUP_TBL[index];
+  uint8_t i = index;
+  if (i < SMBC_FREQ_REG_LOOKUP_TBL_SIZE) {
+    return SMBC_FREQ_REG_LOOKUP_TBL[i];
   }
-  if (index < SMBC_FREQ_REG_LOOKUP_TBL_SIZE + SMBC_MUSIC_LENGTH_LOOKUP_TBL_SIZE) {
-    return SMBC_MUSIC_LENGTH_LOOKUP_TBL[index - SMBC_FREQ_REG_LOOKUP_TBL_SIZE];
+  i -= SMBC_FREQ_REG_LOOKUP_TBL_SIZE;
+  if (i < SMBC_MUSIC_LENGTH_LOOKUP_TBL_SIZE) {
+    return SMBC_MUSIC_LENGTH_LOOKUP_TBL[i];
   }
-  return 0;
+  i -= SMBC_MUSIC_LENGTH_LOOKUP_TBL_SIZE;
+  if (i < SMBC_END_OF_CASTLE_MUSIC_ENV_DATA_SIZE) {
+    return SMBC_END_OF_CASTLE_MUSIC_ENV_DATA[i];
+  }
+  i -= SMBC_END_OF_CASTLE_MUSIC_ENV_DATA_SIZE;
+  if (i < SMBC_AREA_MUSIC_ENV_DATA_SIZE) {
+    return SMBC_AREA_MUSIC_ENV_DATA[i];
+  }
+  i -= SMBC_AREA_MUSIC_ENV_DATA_SIZE;
+  if (i < SMBC_WATER_EVENT_MUS_ENV_DATA_SIZE) {
+    return SMBC_WATER_EVENT_MUS_ENV_DATA[i];
+  }
+  i -= SMBC_WATER_EVENT_MUS_ENV_DATA_SIZE;
+  if (i < SMBC_BOWSER_FLAME_ENV_DATA_SIZE) {
+    return SMBC_BOWSER_FLAME_ENV_DATA[i];
+  }
+  i -= SMBC_BOWSER_FLAME_ENV_DATA_SIZE;
+  if (i < SMBC_BRICK_SHATTER_ENV_DATA_SIZE) {
+    return SMBC_BRICK_SHATTER_ENV_DATA[i];
+  }
+  return VECTOR_TBL[i - SMBC_BRICK_SHATTER_ENV_DATA_SIZE];
 }
 
 /* smb.asm: Dump_Freq_Regs */
 bool sound_dump_freq_regs(Smbc *smbc, uint8_t x, uint8_t a) {
-  uint8_t lo = sound_freq_lookup((uint8_t)(a + 1u));
+  /* $FF+1 wraps the 16-bit indexed address to $0000, which is RAM */
+  uint8_t lo = a == 0xffu ? smbc->state.ram[0] : sound_freq_lookup((uint8_t)(a + 1u));
   if (lo == 0) {
     return false;
   }
@@ -35,6 +61,10 @@ bool sound_dump_freq_regs(Smbc *smbc, uint8_t x, uint8_t a) {
   apu_write(&smbc->apu, (uint16_t)(0x4002u + x), lo);
   apu_write(&smbc->apu, (uint16_t)(0x4003u + x), (uint8_t)(hi | 0x08u));
   return true;
+}
+
+uint32_t sound_freq_dump_cycles(uint8_t a, bool wrote) {
+  return (wrote ? 30u : 15u) + (a == 0xffu ? 1u : 0u);
 }
 
 /* smb.asm: Dump_Squ1_Regs */
@@ -160,7 +190,7 @@ static uint32_t run_sound_subroutines(Smbc *smbc) {
   cycles += sfx_square1_handler(smbc);
   cycles += sfx_square2_handler(smbc);
   cycles += sfx_noise_handler(smbc);
-  sound_music_handler(smbc);
+  cycles += sound_music_handler(smbc);
   st->ram[SMBC_AREA_MUSIC_QUEUE] = 0x00u;
   st->ram[SMBC_EVENT_MUSIC_QUEUE] = 0x00u;
   return cycles + 2u + 3u + 3u;
