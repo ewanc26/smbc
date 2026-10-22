@@ -12,28 +12,42 @@
 #include "state.h"
 
 /* smb.asm: DecTimers — frame timers always; interval timers too when the
- * interval control expires (and it then re-arms at $14). */
-static void dec_timers(CoreState *state) {
+ * interval control expires (and it then re-arms at $14). Returns the cycles
+ * of the path taken; no branch here crosses a page. */
+static uint32_t dec_timers(CoreState *state) {
+  uint32_t cycles = 2u + 6u; /* ldx #$14; dec IntervalTimerControl */
   int end = 0x14;
   state->ram[SMBC_INTERVAL_TIMER_CONTROL]--;
   if ((int8_t)state->ram[SMBC_INTERVAL_TIMER_CONTROL] < 0) {
+    cycles += 2u + 2u + 4u + 2u; /* bpl, not taken; lda #$14; sta; ldx #$23 */
     state->ram[SMBC_INTERVAL_TIMER_CONTROL] = 0x14u;
     end = 0x23;
+  } else {
+    cycles += 3u; /* bpl DecTimersLoop, taken */
   }
   for (int x = end; x >= 0; x--) {
-    if (state->ram[SMBC_TIMERS + x] != 0) {
+    cycles += 4u; /* lda Timers,x */
+    if (state->ram[SMBC_TIMERS + x] == 0) {
+      cycles += 3u; /* beq SkipExpTimer, taken */
+    } else {
       state->ram[SMBC_TIMERS + x]--;
+      cycles += 2u + 7u; /* beq, not taken; dec Timers,x */
     }
+    cycles += 2u + (x > 0 ? 3u : 2u); /* dex; bpl */
   }
+  return cycles;
 }
 
 /* smb.asm: the rotate at PauseSkip — 7-byte LFSR from PseudoRandomBitReg,
  * fed by d1 of byte 0 XOR d1 of byte 1. */
-static void rotate_pseudo_random(CoreState *state) {
+static uint32_t rotate_pseudo_random(CoreState *state) {
+  /* ldx; ldy; lda abs; and; sta $00; lda abs; and; eor $00; clc */
+  uint32_t cycles = 2u + 2u + 4u + 2u + 3u + 4u + 2u + 3u + 2u;
   uint8_t carry =
       (uint8_t)(((state->ram[SMBC_PSEUDO_RANDOM_BIT_REG] ^
                   state->ram[SMBC_PSEUDO_RANDOM_BIT_REG + 1]) &
                  0x02u) != 0);
+  cycles += carry ? 2u + 2u /* beq not taken; sec */ : 3u /* beq taken */;
   for (int i = 0; i < 7; i++) {
     uint8_t v = state->ram[SMBC_PSEUDO_RANDOM_BIT_REG + i];
     uint8_t next_carry = v & 0x01u;
@@ -41,12 +55,20 @@ static void rotate_pseudo_random(CoreState *state) {
         (uint8_t)((v >> 1) | (carry << 7));
     carry = next_carry;
   }
+  cycles += 7u * (7u + 2u + 2u) + 6u * 3u + 2u; /* ror abs,x; inx; dey; bne */
+  return cycles;
 }
 
 void nmi_run(Smbc *smbc) {
   /* smb.asm: NonMaskableInterrupt */
   CoreState *state = &smbc->state;
   Ppu *ppu = &smbc->ppu;
+
+  /* the straight-line prefix to the UpdateScreen call (90), InitScroll's
+   * body (14), the sprite DMA stall (513, measured in every ROM NMI), and
+   * the taken bne ScreenOff (+1) */
+  smbc_charge_cycles(smbc, 90u + 14u + 513u +
+                               (state->ram[SMBC_DISABLE_SCREEN_FLAG] != 0 ? 1u : 0u));
 
   uint8_t mirror1 = (uint8_t)(state->ram[SMBC_MIRROR_PPU_CTRL1] & 0x7fu);
   state->ram[SMBC_MIRROR_PPU_CTRL1] = mirror1;   /* NMIs off in the mirror */
@@ -76,26 +98,39 @@ void nmi_run(Smbc *smbc) {
   state->ram[SMBC_VRAM_BUFFER_ADDR_CTRL] = 0x00u;
   ppu_write(ppu, 1, state->ram[SMBC_MIRROR_PPU_CTRL2]);
 
-  sound_engine(smbc);           /* smb.asm: SoundEngine */
-  read_joypads(smbc);
+  smbc_charge_cycles(smbc, 6u + sound_engine(smbc)); /* jsr SoundEngine */
+  smbc_charge_cycles(smbc, 6u + read_joypads(smbc)); /* jsr ReadJoypads */
+  smbc_charge_cycles(smbc, 6u); /* jsr PauseRoutine; its path is charged inside */
   pause_routine(smbc);
-  update_top_score(state);
+  smbc_charge_cycles(smbc, 6u + update_top_score(state)); /* jsr UpdateTopScore */
 
-  if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) == 0) {
-    uint8_t control = state->ram[SMBC_TIMER_CONTROL];
-    if (control == 0 || --state->ram[SMBC_TIMER_CONTROL] == 0) {
-      dec_timers(state);
+  if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) != 0) {
+    smbc_charge_cycles(smbc, 4u + 2u + 4u); /* lda GamePauseStatus; lsr; bcs PauseSkip, taken across a page */
+  } else {
+    uint32_t cycles = 4u + 2u + 2u + 4u; /* lda GamePauseStatus; lsr; bcs; lda TimerControl */
+    if (state->ram[SMBC_TIMER_CONTROL] == 0) {
+      cycles += 4u + dec_timers(state); /* beq DecTimers, taken across a page */
+    } else {
+      cycles += 2u + 6u; /* beq, not taken; dec TimerControl */
+      if (--state->ram[SMBC_TIMER_CONTROL] == 0) {
+        cycles += 2u + dec_timers(state); /* bne, not taken */
+      } else {
+        cycles += 3u; /* bne NoDecTimers, taken */
+      }
     }
     state->ram[SMBC_FRAME_COUNTER]++; /* smb.asm: NoDecTimers */
+    smbc_charge_cycles(smbc, cycles + 5u); /* inc FrameCounter */
   }
 
-  rotate_pseudo_random(state);  /* smb.asm: PauseSkip */
+  /* smb.asm: PauseSkip, then the sprite-0 flag test (lda abs; beq taken when zero) */
+  smbc_charge_cycles(smbc, rotate_pseudo_random(state) + 4u +
+                               (state->ram[SMBC_SPRITE0_HIT_FLAG] != 0 ? 2u : 3u));
 
   if (state->ram[SMBC_SPRITE0_HIT_FLAG] != 0) {
     ppu_await_sprite0_clear(ppu); /* smb.asm: Sprite0Clr */
     if ((state->ram[SMBC_GAME_PAUSE_STATUS] & 0x01u) == 0) {
       move_sprites_offscreen(state);
-      sprite_shuffler(state);
+      smbc_charge_cycles(smbc, 6u + sprite_shuffler(state)); /* jsr SpriteShuffler */
     }
     /* smb.asm: Sprite0Hit — the render layer evaluates the overlap, the
      * timing layer advances the raster clock to it */

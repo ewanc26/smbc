@@ -22,23 +22,24 @@ typedef struct Smbc {
   Joypad joypad2;
   Ppu ppu;
   Apu apu;
+  /* frames the power-on reset consumes before the cold boot finishes
+   * (boot.h). These are emulated frames with the screen still blank,
+   * so a frame-indexed comparison counts them first. */
+  unsigned reset_frames;
   /* #41: CPU cycles the NMI handler that overruns this frame still owes,
    * measured from this frame's start. 0 when no handler overruns. */
   uint32_t nmi_owed_cycles;
-  /* CPU cycles the handler has charged in the current NMI, through
-   * smbc_charge_cycles. Reset before each handler runs. */
-  uint32_t nmi_cycles;
 } Smbc;
 
 /* NTSC timing in CPU cycles. A frame is 29780 cycles; the NMI fires at the
  * start of line 241, which the issue measured at 27395 cycles into the frame
  * (smb.asm: NonMaskableInterrupt, issue #41). */
-#define SMBC_CPU_CYCLES_PER_FRAME 29780u
-#define SMBC_CPU_CYCLES_TO_VBLANK 27395u
+#define SMBC_CPU_CYCLES_PER_FRAME SMBC_PPU_FRAME_CYCLES
+#define SMBC_CPU_CYCLES_TO_VBLANK SMBC_PPU_VBLANK_CYCLE
 
-/* Charge CPU cost to the NMI handler that is running. Translated routines
- * call this with their cycle counts; nothing charges yet, so every handler
- * costs zero and the NMI timeline below never overruns. */
+/* Charge CPU cost to the NMI handler that is running: the raster clock
+ * advances by the cycles, so writes and waits after the charge land at the
+ * cycle the hardware would reach them. */
 void smbc_charge_cycles(Smbc *smbc, uint32_t cycles);
 
 /* The NMI timeline (#41), as pure steps. nmi_timeline_runs says whether the

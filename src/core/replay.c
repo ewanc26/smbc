@@ -51,12 +51,19 @@ uint64_t smbc_state_hash(const Smbc *smbc) {
   h = hash_u8(h, p->latch ? 1u : 0u);
   h = hash_u8(h, p->vblank ? 1u : 0u);
   h = hash_u8(h, p->sprite0 ? 1u : 0u);
-  h = hash_u16(h, p->scanline);
+  h = hash_u16(h, ppu_scanline(p)); /* the cycle is a function of the line for now */
   h = hash_u8(h, p->t_nt);
   h = hash_u8(h, p->scroll_log_len);
   h = hash_bytes(h, p->scroll_log,
                  sizeof(PpuScrollPoint) * p->scroll_log_len);
   h = hash_bytes(h, smbc->apu.regs, SMBC_APU_REGISTER_COUNT);
+  /* overrun scroll writes (#41) are state the next picture depends on; like
+   * the overrun below, they are hashed only when present */
+  if (p->scroll_carry_len != 0u) {
+    h = hash_u8(h, p->scroll_carry_len);
+    h = hash_bytes(h, p->scroll_carry,
+                   sizeof(PpuScrollPoint) * p->scroll_carry_len);
+  }
   /* an NMI overrun (#41) is state the next frame depends on. It is hashed
    * only when set, so recordings made before it existed still match. */
   if (smbc->nmi_owed_cycles != 0u) {

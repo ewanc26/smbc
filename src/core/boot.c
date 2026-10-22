@@ -11,6 +11,7 @@
 void boot_run(Smbc *smbc) {
   /* smb.asm: Start */
   CoreState *state = &smbc->state;
+  smbc->reset_frames = SMBC_RESET_FRAMES;
 
   ppu_write(&smbc->ppu, 0, 0x10u); /* lda #%00010000; sta PPU_CTRL_REG1 */
 

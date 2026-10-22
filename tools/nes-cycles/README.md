@@ -23,6 +23,29 @@ Build and run (inputs are one button byte per frame, as in `frame_dump`):
        ../../src/hw/apu.c ../../src/data/chr.c
     ./nes_trace /path/to/smb.nes inputs.bin 450 out
 
+With `NES_PROFILE=1` the run also writes `out-routines.csv`: for each ROM
+address, the self cycles spent in it inside NMI handlers and how many times it
+was entered (JSR or the NMI vector). Addresses are ROM addresses.
+
+`asm_labels.py` gives the address of every `smb.asm` label. It assembles the
+source and checks the result byte for byte against the ROM (0 mismatches for
+the 32 KB PRG). Use `--syms` to list the labels, then join them to the profile.
+
+`static_costs.py smb.asm <prefix>...` takes each instruction's base cycles from
+the `BASE` table in `cpu6502.c` and checks the `-pc.csv` profiles against it. The
+measured cost per execution must never be below base, and must equal it unless a
+branch or indexed read adds a penalty. It exits 1 on a violation or an address
+the assembler does not map as an instruction start.
+
+Current result on the five gameplay profiles: 0 addresses below base; 3
+unexplained. 80b3 is `sta SPR_DMA`: it measures 517 cycles per execution in
+every scenario, which is the 4-cycle store plus the 513-cycle OAM DMA stall
+(not a sprite-0 wait). 8222 and e3eb are `.db $2c` BIT-skip entries
+(MoveAllSpritesOffscreen, BlockBufferColli_Head), intentional mid-instruction
+entries that `asm_labels` does not record as instruction starts. Both cost exactly
+the BIT base per execution, so they are not a profiler error (the CSV columns are
+address, cycles, executions; an earlier reading of them as cycles/executions was wrong).
+
 ## Validation so far
 
 Against the reference emulator's RAM, on the title and demo scenarios:
@@ -94,15 +117,16 @@ nes-py does not expose.
 
 ## Visual parity (#31): what the pictures show
 
-- **Display offset.** The port's frame *f* matches the emulator's screen at step
-  *f*+1. Game state written in NMI *f* is first drawn in frame *f*+1, so
-  `compare_pictures.py` defaults to offset 1. (The RAM comparisons above use the
-  same index, not offset 1.)
-- With that offset the renderer is pixel-exact wherever the NMI timing agrees:
-  - walk, frames 0–355 (all exact), then 747 of 949 frames overall;
-  - start, 448 of 449 frames (frame 356 differs by 171 pixels);
-  - jump, the same as walk;
-  - demo, frames 0–556.
+- **Display offset.** Before frame 748 the port's frame *f* matches the
+  emulator's screen at step *f*+1 (walk, `emulator_compare.py` offset 1). From
+  frame 748 on, with the absolute raster clock (457ac23), frame *f* matches step
+  *f* instead: walk frame 748 differs by 105 pixels at offset 0 and 10,574 at
+  offset 1; frame 749 by 281 and 10,799. The alignment changes at frame 748
+  because the NMI's post-sprite-0 scroll writes now land one picture later,
+  which is the #41 timing gap. A single fixed offset does not fit the whole run.
+- Exact-frame counts from `emulator_compare.py` at offset 1 are 185 of 950 for
+  walk (the same for HEAD and the working tree). The earlier 747/949 figure was
+  from a different measurement and is withdrawn.
 - **Frame 356** (start and walk): the emulator draws a 171-pixel blue sky line on
   the top row; the port's top row is black. A palette write at the first visible line.
 - **Frame 748 on** (walk, jump): the scroll drifts by a few pixels from frame to

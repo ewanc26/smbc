@@ -48,31 +48,31 @@ int main(void) {
     assert(owed == 0u); /* the last handler (frame 6) was short */
   }
 
-  /* #41: with no cost charged, every handler finishes inside its frame, so
-   * nothing is ever owed and every frame runs its NMI */
+  /* #41: a handler that runs past the frame boundary is owed to the next frame;
+   * the next NMI still runs while the owed time is short of the vblank point */
   {
-    Smbc quiet;
-    smbc_init(&quiet);
-    assert(quiet.nmi_owed_cycles == 0u);
-    /* the first two frames run InitializeGame, which clears the counter,
-     * so count from there: each frame's NMI adds exactly one */
-    smbc_frame(&quiet);
-    smbc_frame(&quiet);
-    for (unsigned f = 0; f < 10; f++) {
-      uint8_t before = quiet.state.ram[SMBC_FRAME_COUNTER];
-      smbc_frame(&quiet);
-      assert(quiet.nmi_owed_cycles == 0u);
-      assert((uint8_t)(quiet.state.ram[SMBC_FRAME_COUNTER] - before) == 1u);
+    Smbc owed;
+    smbc_init(&owed);
+    for (unsigned f = 0; f < 10 && owed.nmi_owed_cycles == 0u; f++) {
+      smbc_frame(&owed);
+    }
+    if (owed.nmi_owed_cycles != 0u) {
+      uint32_t carried = owed.nmi_owed_cycles;
+      uint8_t before = owed.state.ram[SMBC_FRAME_COUNTER];
+      smbc_frame(&owed);
+      assert((uint8_t)(owed.state.ram[SMBC_FRAME_COUNTER] - before) == 1u);
+      assert(carried <= SMBC_CPU_CYCLES_TO_VBLANK);
     }
   }
 
-  /* charging accumulates into the running handler's cost */
+  /* charges advance the raster clock; a frame ends at the clock's position */
   {
     Smbc charged;
     smbc_init(&charged);
+    ppu_enter_vblank(&charged.ppu);
     smbc_charge_cycles(&charged, 100u);
     smbc_charge_cycles(&charged, 25u);
-    assert(charged.nmi_cycles == 125u);
+    assert(charged.ppu.cycle == SMBC_PPU_VBLANK_CYCLE + 125u);
   }
 
   printf("tests/core/frame: ok\n");

@@ -16,10 +16,40 @@ void ppu_set_vblank(Ppu *ppu, bool active) {
   ppu->vblank = active;
 }
 
+uint32_t ppu_line_start(uint16_t line) {
+  if (line > SMBC_PPU_LAST_SCANLINE) line = SMBC_PPU_LAST_SCANLINE;
+  if (line < SMBC_PPU_VBLANK_SCANLINE) {
+    return (uint32_t)line * SMBC_PPU_VBLANK_CYCLE / SMBC_PPU_VBLANK_SCANLINE;
+  }
+  uint32_t vblank_lines = SMBC_PPU_LAST_SCANLINE - SMBC_PPU_VBLANK_SCANLINE + 1u;
+  return SMBC_PPU_VBLANK_CYCLE +
+         (uint32_t)(line - SMBC_PPU_VBLANK_SCANLINE) *
+             (SMBC_PPU_FRAME_CYCLES - SMBC_PPU_VBLANK_CYCLE) / vblank_lines;
+}
+
+static uint16_t line_of(uint32_t cycle) {
+  uint16_t line = 0;
+  while (line < SMBC_PPU_LAST_SCANLINE &&
+         ppu_line_start((uint16_t)(line + 1u)) <= cycle) {
+    line++;
+  }
+  return line;
+}
+
+uint16_t ppu_scanline(const Ppu *ppu) {
+  return line_of(ppu->cycle);
+}
+
 void ppu_enter_vblank(Ppu *ppu) {
-  ppu->scanline = SMBC_PPU_VBLANK_SCANLINE;
+  ppu->cycle = ppu_line_start(SMBC_PPU_VBLANK_SCANLINE);
   ppu->vblank = true;
-  ppu->scroll_log_len = 0; /* the NMI prepares the frame's scroll fresh */
+  /* the NMI prepares the frame's scroll fresh; writes that overran the
+   * previous frame belong to this picture, ahead of the NMI's own */
+  ppu->scroll_log_len = ppu->scroll_carry_len;
+  for (uint8_t i = 0; i < ppu->scroll_carry_len; i++) {
+    ppu->scroll_log[i] = ppu->scroll_carry[i];
+  }
+  ppu->scroll_carry_len = 0;
 }
 
 void ppu_end_frame(Ppu *ppu) {
@@ -27,7 +57,7 @@ void ppu_end_frame(Ppu *ppu) {
    * both status flags on hardware), and wrap to the next frame's top */
   ppu->vblank = false;
   ppu->sprite0 = false;
-  ppu->scanline = 0;
+  ppu->cycle = 0;
 }
 
 void ppu_set_chr(Ppu *ppu, const uint8_t *chr) {
@@ -41,29 +71,37 @@ void ppu_oam_dma(Ppu *ppu, const uint8_t *page) {
 }
 
 void ppu_await_vblank(Ppu *ppu) {
-  /* advance to vblank, present the flag, then consume it as the
-   * original's polling $2002 read would */
-  ppu->scanline = SMBC_PPU_VBLANK_SCANLINE;
+  ppu->cycle = ppu_line_start(SMBC_PPU_VBLANK_SCANLINE);
+  /* the polling read observes the flag, and that read clears it */
   ppu->vblank = true;
   ppu->vblank = false;
   ppu->latch = false;
 }
 
+/* A wait never moves the clock backwards: a handler already past the
+ * transition it polls for does not wait at all. */
+static void advance_clock(Ppu *ppu, uint32_t target) {
+  if (ppu->cycle < target) ppu->cycle = target;
+}
+
 void ppu_await_sprite0_clear(Ppu *ppu) {
   /* the hardware clears both flags at the pre-render line */
-  ppu->scanline = SMBC_PPU_LAST_SCANLINE;
+  advance_clock(ppu, ppu_line_start(SMBC_PPU_LAST_SCANLINE));
   ppu->sprite0 = false;
   ppu->vblank = false;
 }
 
+/* The hit is in the picture after this frame's pre-render line, so the
+ * target is one whole frame plus the hit line's start. */
 void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline) {
   if (hit_scanline < 0) {
     /* no overlap this frame: the original would spin forever, so the
      * clock just runs out the visible lines with the flag clear */
-    ppu->scanline = SMBC_PPU_LAST_VISIBLE;
+    advance_clock(ppu, SMBC_PPU_FRAME_CYCLES + ppu_line_start(SMBC_PPU_LAST_VISIBLE));
+    ppu->sprite0 = false;
     return;
   }
-  ppu->scanline = (uint16_t)hit_scanline;
+  advance_clock(ppu, SMBC_PPU_FRAME_CYCLES + ppu_line_start((uint16_t)hit_scanline));
   ppu->sprite0 = true;
 }
 
@@ -77,19 +115,31 @@ void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline) {
  * write_ppu_reg1 with the gameplay table selected. (The $2006 coarse
  * x/y effect on the reload is not modelled: the game always
  * re-establishes the scroll through $2005 before the frame renders.) */
-static void ppu_log_scroll(Ppu *ppu) {
+static void scroll_point(PpuScrollPoint *log, uint8_t *len, uint16_t line,
+                         const Ppu *ppu) {
   PpuScrollPoint *point;
-  if (ppu->scroll_log_len > 0 &&
-      ppu->scroll_log[ppu->scroll_log_len - 1].scanline == ppu->scanline) {
-    point = &ppu->scroll_log[ppu->scroll_log_len - 1]; /* coalesce */
+  if (*len > 0 && log[*len - 1].scanline == line) {
+    point = &log[*len - 1]; /* coalesce */
   } else {
-    if (ppu->scroll_log_len >= SMBC_PPU_SCROLL_LOG) return;
-    point = &ppu->scroll_log[ppu->scroll_log_len++];
-    point->scanline = ppu->scanline;
+    if (*len >= SMBC_PPU_SCROLL_LOG) return;
+    point = &log[(*len)++];
+    point->scanline = line;
   }
   point->x = ppu->scroll_x;
   point->y = ppu->scroll_y;
   point->nt = ppu->t_nt;
+}
+
+/* A write past the frame's end (an NMI that overran it) belongs to the next
+ * picture at its wrapped line: it is carried over, not logged here. */
+static void ppu_log_scroll(Ppu *ppu) {
+  if (ppu->cycle >= SMBC_PPU_FRAME_CYCLES) {
+    scroll_point(ppu->scroll_carry, &ppu->scroll_carry_len,
+                 line_of(ppu->cycle - SMBC_PPU_FRAME_CYCLES), ppu);
+  } else {
+    scroll_point(ppu->scroll_log, &ppu->scroll_log_len, line_of(ppu->cycle),
+                 ppu);
+  }
 }
 
 /* $2007 increment shared by reads and writes: d2 of $2000 selects 32. */

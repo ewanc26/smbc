@@ -37,6 +37,11 @@
 #define SMBC_PPU_VBLANK_SCANLINE 241u /* vblank begins, NMI fires */
 #define SMBC_PPU_LAST_VISIBLE 239u
 
+/* The clock counts CPU cycles. One frame is 29780 of them, and vblank begins
+ * 27395 cycles in (issue #41). */
+#define SMBC_PPU_FRAME_CYCLES 29780u
+#define SMBC_PPU_VBLANK_CYCLE 27395u
+
 /* One scroll record: the raster line the state took effect on and the
  * scroll it selects (the $2005 pair plus t's name-table bits). Writes
  * on the same scanline coalesce into one record — the hardware's
@@ -72,7 +77,8 @@ typedef struct {
   bool latch;         /* $2005/$2006 first/second-write toggle */
   bool vblank;        /* status bit 7, set by the frame loop */
   bool sprite0;       /* status bit 6, driven by the raster clock */
-  uint16_t scanline;  /* virtual raster clock, 0-261 */
+  uint32_t cycle;     /* virtual raster clock: CPU cycles into the frame;
+                       * the scanline is derived with ppu_scanline */
   uint8_t t_nt;       /* t's name-table bits: $2000 d0/d1, or address
                        * bits 10-11 after a completed $2006 pair — kept
                        * apart from ctrl1 because the VRAM address
@@ -80,6 +86,9 @@ typedef struct {
   PpuScrollPoint scroll_log[SMBC_PPU_SCROLL_LOG]; /* this frame's scroll
                        * writes, in order; reset when vblank begins */
   uint8_t scroll_log_len;
+  PpuScrollPoint scroll_carry[SMBC_PPU_SCROLL_LOG]; /* writes that overran
+                       * the frame, for the next picture (see ppu_log_scroll) */
+  uint8_t scroll_carry_len;
 } Ppu;
 
 void ppu_init(Ppu *ppu);
@@ -101,6 +110,12 @@ void ppu_set_vblank(Ppu *ppu, bool active);
  *    otherwise leave stale state). */
 void ppu_enter_vblank(Ppu *ppu);
 void ppu_end_frame(Ppu *ppu);
+
+/* The cycle at which a scanline begins, and the scanline the clock is on.
+ * Scanline starts strictly increase, and line 241 begins at the vblank
+ * cycle. ppu_scanline is clamped to the pre-render line. */
+uint32_t ppu_line_start(uint16_t line);
+uint16_t ppu_scanline(const Ppu *ppu);
 
 /* Nominate the cartridge's CHR ROM for pattern-table reads. */
 void ppu_set_chr(Ppu *ppu, const uint8_t *chr);
@@ -130,12 +145,14 @@ void ppu_oam_dma(Ppu *ppu, const uint8_t *page);
  *    as the original's polling read would observe it;
  *  - ppu_await_sprite0_clear advances to the pre-render line, where
  *    the hardware clears both status flags;
- *  - ppu_await_sprite0_set advances to the sprite-0 hit scanline
- *    supplied by the caller — computed by hw/render from the current
- *    PPU state, keeping the timing layer free of pixel work. When the
- *    caller reports no hit (-1) the clock advances past the visible
- *    frame and the flag stays clear; the original would hang on the
- *    wait, and the game never arranges that. */
+ *  - ppu_await_sprite0_set advances to the sprite-0 hit scanline of
+ *    the picture after the current frame's pre-render line (one whole
+ *    frame on), supplied by the caller — computed by hw/render from
+ *    the current PPU state, keeping the timing layer free of pixel
+ *    work. When the caller reports no hit (-1) the clock advances past
+ *    the visible frame and the flag stays clear; the original would
+ *    hang on the wait, and the game never arranges that.
+ * A wait never moves the clock backwards. */
 void ppu_await_vblank(Ppu *ppu);
 void ppu_await_sprite0_clear(Ppu *ppu);
 void ppu_await_sprite0_set(Ppu *ppu, int hit_scanline);

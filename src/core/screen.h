@@ -34,7 +34,7 @@ void update_screen(struct Smbc *smbc);
 
 /* smb.asm: UpdateTopScore — copy either player's score into the top score
  * display when it exceeds it. */
-void update_top_score(CoreState *state);
+uint32_t update_top_score(CoreState *state);
 
 /* smb.asm: PrintStatusBarNumbers — print the status bar values selected by
  * the two nybbles of `nybbles` into VRAM buffer 1: the low nybble selects

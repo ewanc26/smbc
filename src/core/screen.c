@@ -163,6 +163,14 @@ static uint8_t source_byte(const CoreState *state, const uint8_t *rom,
   return state->ram[(uint16_t)(pos + y)];
 }
 
+/* smb.asm: OutputToVRAM — X counts down from the length, so length 0 runs
+ * 256 iterations. Repeat mode is 16 cycles per byte, otherwise 17; each
+ * taken bne back to the loop top adds one cycle except the last. */
+static uint32_t vram_loop_cycles(uint8_t length, bool repeat) {
+  uint32_t n = length == 0 ? 256u : length;
+  return n * (repeat ? 16u : 17u) + (n - 1u);
+}
+
 void update_screen(Smbc *smbc) {
   /* smb.asm: UpdateScreen */
   CoreState *state = &smbc->state;
@@ -182,6 +190,7 @@ void update_screen(Smbc *smbc) {
   }
 
   uint8_t first = source_byte(state, rom, pos, 0);
+  uint32_t cycles = 13u + (first != 0 ? 1u : 0u); /* UpdateScreen entry check */
   while (first != 0) {
     /* smb.asm: WriteBufferToScreen — one update set:
      *   byte 1-2: VRAM address, high then low
@@ -201,10 +210,13 @@ void update_screen(Smbc *smbc) {
 
     bool repeat = (third & 0x40u) != 0; /* d6 of the third byte */
     uint8_t length = (uint8_t)(third & 0x3fu);
+    cycles += 103u + ((third & 0x80u) != 0 ? 3u : 4u) + (repeat ? 6u : 3u) +
+              vram_loop_cycles(length, repeat);
     if (repeat) {
       y++; /* smb.asm: ora #%00000010; iny */
     }
-    for (; length != 0; length--) {
+    unsigned count = length == 0 ? 256u : length;
+    for (unsigned i = 0; i < count; i++) {
       /* smb.asm: OutputToVRAM — repeat mode holds Y on the data byte */
       if (!repeat) {
         y++;
@@ -225,13 +237,17 @@ void update_screen(Smbc *smbc) {
     ppu_write(ppu, 6, 0x00u);
     ppu_write(ppu, 6, 0x00u);
     first = source_byte(state, rom, pos, 0);
+    cycles += 13u + (first != 0 ? 1u : 0u);
   }
+  cycles += 14u; /* smb.asm: InitScroll body, reached by falling through */
+  smbc_charge_cycles(smbc, cycles);
   init_scroll(smbc, first); /* smb.asm: falls through to InitScroll, A=0 */
 }
 
 /* smb.asm: TopScoreCheck — six-digit subtraction, lowest digit first; the
  * score is copied only if no borrow survives the final digit. */
-static void top_score_check(CoreState *state, int x) {
+static uint32_t top_score_check(CoreState *state, int x) {
+  uint32_t cycles = 2u + 2u; /* ldy #$05; sec */
   int y = 5;
   int no_borrow = 1; /* sec on entry */
   for (int i = 0; i < 6; i++) {
@@ -240,10 +256,12 @@ static void top_score_check(CoreState *state, int x) {
     no_borrow = diff >= 0;
     x--;
     y--;
+    cycles += 4u + 4u + 2u + 2u + (i < 5 ? 3u : 2u); /* lda; sbc; dex; dey; bpl */
   }
   if (!no_borrow) {
-    return; /* smb.asm: NoTopSc */
+    return cycles + 3u + 6u; /* bcc NoTopSc, taken; rts */
   }
+  cycles += 2u + 2u + 2u; /* bcc, not taken; inx; iny */
   x++;
   y++;
   for (int i = 0; i < 6; i++) {
@@ -251,13 +269,17 @@ static void top_score_check(CoreState *state, int x) {
         state->ram[SMBC_PLAYER_SCORE_DISPLAY + x];
     x++;
     y++;
+    cycles += 4u + 5u + 2u + 2u + 2u + (i < 5 ? 3u : 2u); /* lda; sta; inx; iny; cpy; bcc */
   }
+  return cycles + 6u; /* NoTopSc: rts */
 }
 
-void update_top_score(CoreState *state) {
-  /* smb.asm: UpdateTopScore — mario's score, then luigi's */
-  top_score_check(state, 0x05);
-  top_score_check(state, 0x0b);
+uint32_t update_top_score(CoreState *state) {
+  /* smb.asm: UpdateTopScore — mario's score, then luigi's, falling into TopScoreCheck */
+  uint32_t cycles = 2u + 6u; /* ldx #$05; jsr TopScoreCheck */
+  cycles += top_score_check(state, 0x05);
+  cycles += 2u; /* ldx #$0b */
+  return cycles + top_score_check(state, 0x0b);
 }
 
 void get_player_colors(Smbc *smbc) { get_player_colors_core(&smbc->state); }
@@ -448,7 +470,7 @@ void screen_routines(Smbc *smbc) {
     case 8: /* smb.asm: AreaParserTaskControl */
       st->ram[SMBC_DISABLE_SCREEN_FLAG]++; /* turn off screen */
       do {
-        area_parser_task_handler(st);
+        smbc_charge_cycles(smbc, area_parser_task_handler(st));
       } while (st->ram[SMBC_AREA_PARSER_TASK_NUM] != 0x00); /* TaskLoop */
       st->ram[SMBC_COLUMN_SETS]--;
       if ((st->ram[SMBC_COLUMN_SETS] & 0x80u) != 0x00) {

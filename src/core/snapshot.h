@@ -10,9 +10,9 @@
  * Not owned: file I/O (the host writes the bytes to disk) and storage (the
  * caller supplies every buffer, so nothing here allocates).
  *
- * Image layout, format v1 (all integers little-endian):
+ * Image layout, format v2 (all integers little-endian):
  *   char[8]  magic "SMBCSNAP"
- *   u16      version (= 1)
+ *   u16      version (= 2)
  *   u16      reserved (0)
  *   ...      payload, in the order snapshot.c writes it
  *
@@ -28,7 +28,7 @@
 
 #include "frame.h"
 
-#define SMBC_SNAPSHOT_VERSION 1u
+#define SMBC_SNAPSHOT_VERSION 2u
 
 /* Exact size of one image. Constant for the format. */
 size_t smbc_snapshot_size(void);

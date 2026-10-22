@@ -32,7 +32,7 @@ void upd_scroll_var(Smbc *smbc) {
     st->ram[SMBC_VRAM_BUFFER2_OFFSET] = 0x00;
   }
   /* smb.asm: RunParser — AreaParserTaskHandler */
-  area_parser_task_handler(st);
+  smbc_charge_cycles(smbc, area_parser_task_handler(st));
 }
 
 /* smb.asm: GameRoutines — jump table order:
