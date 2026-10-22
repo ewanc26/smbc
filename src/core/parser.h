@@ -19,7 +19,7 @@
 /* smb.asm: AreaParserTaskHandler — run one task of the eight-task cycle,
  * defaulting the counter to eight; when the cycle completes, flush the
  * attribute buffer into VRAM buffer 2. Returns the CPU cycles of the task
- * run; tasks not yet costed report 0. */
+ * run, excluding the object decoder's (not yet charged). */
 uint32_t area_parser_task_handler(CoreState *state);
 
 /* smb.asm: KillEnemies — clear the enemy flag on every slot holding
