@@ -22,7 +22,6 @@
 
 /* smb.asm: the frequency-register load. Dump_Freq_Regs costs 30 cycles when it
  * writes the registers and 15 when NoTone skips them (both include the rts). */
-static uint32_t freq_cycles(bool wrote) { return wrote ? 30u : 15u; }
 
 /* smb.asm: DecrementSfx1Length, including the rts; the stop path adds StopSquare1Sfx */
 static uint32_t decrement_sfx1_length(Smbc *smbc) {
@@ -36,7 +35,7 @@ static uint32_t decrement_sfx1_length(Smbc *smbc) {
 
 /* smb.asm: jsr PlaySqu1Sfx (Dump_Squ1_Regs, then SetFreq_Squ1) */
 uint32_t sfx_play_squ1(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
-  return 6u + 22u + freq_cycles(sound_play_squ1_sfx(smbc, a, x, y));
+  return 6u + 22u + sound_freq_dump_cycles(a, sound_play_squ1_sfx(smbc, a, x, y));
 }
 
 /* smb.asm: ContinueSndJump — the three-part jump envelope, then DecrementSfx1Length */
@@ -155,7 +154,7 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
     /* smb.asm: PlayFlagpoleSlide */
     st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x40u;
     cycles = 61u + 2u + 4u + 2u + 6u + 2u /* ldx #$00 in SetFreq_Squ1 */ +
-             freq_cycles(sound_set_freq_squ1(smbc, 0x62u));
+             sound_freq_dump_cycles(0x62u, sound_set_freq_squ1(smbc, 0x62u));
     cycles += 2u + 3u; /* ldx #$99; bne FPS2nd */
     sound_dump_squ1_regs(smbc, 0x99u, 0xbcu);
     cycles += 2u + 6u + 14u + 4u + 3u + 3u; /* ldy; jsr dump; bne DecJpFPS, taken across a page; bne BranchToDecLength1; bne DecrementSfx1Length */
@@ -195,12 +194,12 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
 
 /* smb.asm: jsr PlaySqu2Sfx (Dump_Sq2_Regs, then SetFreq_Squ2 with its bne) */
 static uint32_t play_squ2(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
-  return 6u + 6u + 14u + 2u + 3u + freq_cycles(sound_play_squ2_sfx(smbc, a, x, y));
+  return 6u + 6u + 14u + 2u + 3u + sound_freq_dump_cycles(a, sound_play_squ2_sfx(smbc, a, x, y));
 }
 
 /* smb.asm: jsr SetFreq_Squ2 */
 static uint32_t set_freq_squ2(Smbc *smbc, uint8_t a) {
-  return 6u + 2u + 3u + freq_cycles(sound_set_freq_squ2(smbc, a));
+  return 6u + 2u + 3u + sound_freq_dump_cycles(a, sound_set_freq_squ2(smbc, a));
 }
 
 /* smb.asm: DecrementSfx2Length, including the rts; the stop path adds EmptySfx2Buffer */
