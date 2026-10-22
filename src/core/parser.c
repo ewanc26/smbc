@@ -894,15 +894,18 @@ static void area_parser_core(CoreState *st) {
 }
 
 /* smb.asm: IncrementColumnPos */
-static void increment_column_pos(CoreState *st) {
+static uint32_t increment_column_pos(CoreState *st) {
   uint8_t col = (uint8_t)(st->ram[SMBC_CURRENT_COLUMN_POS] + 1u);
+  uint32_t cycles = 37u; /* the no-wrap path, its rts included */
   if ((col & 0x0fu) == 0x00u) { /* a wrapped column is a new page */
     col = 0x00u;
     st->ram[SMBC_CURRENT_PAGE_LOC]++;
+    cycles += 9u; /* the wrap's extra store and inc, and the bne not taken */
   }
   st->ram[SMBC_CURRENT_COLUMN_POS] = col;
   st->ram[SMBC_BLOCK_BUFFER_COLUMN_POS] =
       (uint8_t)(st->ram[SMBC_BLOCK_BUFFER_COLUMN_POS] + 1u) & 0x1fu;
+  return cycles;
 }
 
 /* smb.asm: RenderAreaGraphics — draw one column of metatiles from the
@@ -983,10 +986,11 @@ static uint32_t render_area_graphics(CoreState *st) {
 
 /* smb.asm: RenderAttributeTables — flush the attribute buffer into VRAM
  * buffer 2, one byte per attribute cell, and clear the buffer behind it */
-static void render_attribute_tables(CoreState *st) {
+static uint32_t render_attribute_tables(CoreState *st) {
   uint8_t low = st->ram[SMBC_CURRENT_NT_ADDR_LOW];
   /* sec; sbc #$04 — the borrow flags a name-table boundary crossing */
   bool borrow = (uint8_t)(low & 0x1fu) < 0x04u;
+  uint32_t cycles = 480u + (borrow ? 15u : 14u); /* a borrow takes the eor */
   low = (uint8_t)((low & 0x1fu) - 0x04u) & 0x1fu;
   uint8_t high = st->ram[SMBC_CURRENT_NT_ADDR_HIGH];
   if (borrow) {
@@ -1009,15 +1013,16 @@ static void render_attribute_tables(CoreState *st) {
   st->ram[SMBC_VRAM_BUFFER2 + y] = 0x00u; /* null terminator */
   st->ram[SMBC_VRAM_BUFFER2_OFFSET] = y;
   st->ram[SMBC_VRAM_BUFFER_ADDR_CTRL] = 0x06u; /* SetVRAMCtrl */
+  return cycles;
 }
 
 static uint32_t run_task(CoreState *st, uint8_t task) {
   switch (task) { /* smb.asm: AreaParserTasks, jump table order */
-    case 0: increment_column_pos(st); return 0;
+    case 0: return increment_column_pos(st);
     case 1: return render_area_graphics(st);
     case 2: return render_area_graphics(st);
     case 3: area_parser_core(st); return 0;
-    case 4: increment_column_pos(st); return 0;
+    case 4: return increment_column_pos(st);
     case 5: return render_area_graphics(st);
     case 6: return render_area_graphics(st);
     default: area_parser_core(st); return 0;
@@ -1032,7 +1037,7 @@ uint32_t area_parser_task_handler(CoreState *st) {
       run_task(st, (uint8_t)(st->ram[SMBC_AREA_PARSER_TASK_NUM] - 1u));
   st->ram[SMBC_AREA_PARSER_TASK_NUM]--;
   if (st->ram[SMBC_AREA_PARSER_TASK_NUM] == 0x00u) {
-    render_attribute_tables(st); /* the cycle flushes its attributes */
+    cycles += render_attribute_tables(st); /* the cycle flushes its attributes */
   }
   return cycles;
 }
