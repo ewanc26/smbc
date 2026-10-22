@@ -15,10 +15,12 @@
                                                * strobe */                 \
    + 3u + 2u + 0x4000u + 2u + 1u + 0x100u     /* PPU registers and VRAM,  \
                                                * scroll, read buffer, OAM */ \
-   + 3u + 2u + 1u + 1u + SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE /* \
+   + 3u + 4u + 1u + 1u + SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE /* \
                                                * latch, flags, clock, \
                                                * t_nt, scroll log */ \
-   + SMBC_APU_REGISTER_COUNT + 1u)            /* APU image + $4015 status */
+   + SMBC_APU_REGISTER_COUNT + 1u             /* APU image + $4015 status */ \
+   + 4u + 1u + SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE) /* NMI overrun, \
+                                               * overrun scroll writes */
 
 size_t smbc_snapshot_size(void) {
   return SMBC_SNAPSHOT_HEADER + SMBC_SNAPSHOT_PAYLOAD;
@@ -39,6 +41,11 @@ static void put16(Cursor *c, uint16_t v) {
   put8(c, (uint8_t)(v >> 8));
 }
 
+static void put32(Cursor *c, uint32_t v) {
+  put16(c, (uint16_t)v);
+  put16(c, (uint16_t)(v >> 16));
+}
+
 static void put_bytes(Cursor *c, const void *data, size_t len) {
   memcpy(c->out + c->pos, data, len);
   c->pos += len;
@@ -50,6 +57,12 @@ static uint16_t get16(Cursor *c) {
   uint16_t lo = get8(c);
   uint16_t hi = get8(c);
   return (uint16_t)(lo | (hi << 8));
+}
+
+static uint32_t get32(Cursor *c) {
+  uint32_t lo = get16(c);
+  uint32_t hi = get16(c);
+  return lo | (hi << 16);
 }
 
 static void get_bytes(Cursor *c, void *data, size_t len) {
@@ -82,7 +95,7 @@ static void write_payload(Cursor *c, const Smbc *smbc) {
   put8(c, p->latch ? 1u : 0u);
   put8(c, p->vblank ? 1u : 0u);
   put8(c, p->sprite0 ? 1u : 0u);
-  put16(c, p->scanline);
+  put32(c, p->cycle);
   put8(c, p->t_nt);
   put8(c, p->scroll_log_len);
   for (unsigned i = 0; i < SMBC_PPU_SCROLL_LOG; i++) {
@@ -94,6 +107,15 @@ static void write_payload(Cursor *c, const Smbc *smbc) {
 
   put_bytes(c, smbc->apu.regs, SMBC_APU_REGISTER_COUNT);
   put8(c, smbc->apu.status4015);
+
+  put32(c, smbc->nmi_owed_cycles);
+  put8(c, p->scroll_carry_len);
+  for (unsigned i = 0; i < SMBC_PPU_SCROLL_LOG; i++) {
+    put16(c, i < p->scroll_carry_len ? p->scroll_carry[i].scanline : 0u);
+    put8(c, i < p->scroll_carry_len ? p->scroll_carry[i].x : 0u);
+    put8(c, i < p->scroll_carry_len ? p->scroll_carry[i].y : 0u);
+    put8(c, i < p->scroll_carry_len ? p->scroll_carry[i].nt : 0u);
+  }
 }
 
 /* Read the payload into smbc. The caller has already checked the length and
@@ -121,7 +143,7 @@ static void read_payload(Cursor *c, Smbc *smbc) {
   p->latch = get8(c) != 0;
   p->vblank = get8(c) != 0;
   p->sprite0 = get8(c) != 0;
-  p->scanline = get16(c);
+  p->cycle = get32(c);
   p->t_nt = get8(c);
   p->scroll_log_len = get8(c);
   /* the hash reads the scroll log's struct bytes, padding included, so start
@@ -137,6 +159,16 @@ static void read_payload(Cursor *c, Smbc *smbc) {
   get_bytes(c, smbc->apu.regs, SMBC_APU_REGISTER_COUNT);
   smbc->apu.status4015 = get8(c);
   smbc->apu.log_len = 0; /* per-frame; not part of the image */
+
+  smbc->nmi_owed_cycles = get32(c);
+  p->scroll_carry_len = get8(c);
+  memset(p->scroll_carry, 0, sizeof(p->scroll_carry));
+  for (unsigned i = 0; i < SMBC_PPU_SCROLL_LOG; i++) {
+    p->scroll_carry[i].scanline = get16(c);
+    p->scroll_carry[i].x = get8(c);
+    p->scroll_carry[i].y = get8(c);
+    p->scroll_carry[i].nt = get8(c);
+  }
 }
 
 /* ------------------------------------------------------------ images */
@@ -167,9 +199,15 @@ bool smbc_snapshot_read(Smbc *smbc, const uint8_t *in, size_t len) {
   /* The scroll-log count is the one field that can index past its array,
    * so check it before anything is written. */
   size_t scroll_len_at = SMBC_SNAPSHOT_HEADER + SMBC_SNAPSHOT_PAYLOAD -
-                         (SMBC_APU_REGISTER_COUNT + 1u) - 1u -
+                         (SMBC_APU_REGISTER_COUNT + 1u) - (4u + 1u) -
+                         SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE - 1u -
                          SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE;
   if (in[scroll_len_at] > SMBC_PPU_SCROLL_LOG) {
+    return false;
+  }
+  size_t carry_len_at = SMBC_SNAPSHOT_HEADER + SMBC_SNAPSHOT_PAYLOAD -
+                        SMBC_PPU_SCROLL_LOG * SMBC_SCROLL_POINT_SIZE - 1u;
+  if (in[carry_len_at] > SMBC_PPU_SCROLL_LOG) {
     return false;
   }
   c.pos = SMBC_SNAPSHOT_HEADER;

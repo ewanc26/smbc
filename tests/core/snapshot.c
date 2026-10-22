@@ -97,14 +97,20 @@ int main(void) {
     assert(!smbc_snapshot_read(&victim, bad, size));
 
     memcpy(bad, image, size);
-    bad[8] = 2;                                             /* version */
+    bad[8] = 3;                                             /* version */
     assert(!smbc_snapshot_read(&victim, bad, size));
 
-    /* scroll-log count past its array (the last field before the APU) */
+    /* scroll-log count past its array (before the APU image) */
     memcpy(bad, image, size);
-    size_t count_at = size - (SMBC_APU_REGISTER_COUNT + 1u) - 1u -
+    size_t count_at = size - (SMBC_APU_REGISTER_COUNT + 1u) - (4u + 1u) -
+                      SMBC_PPU_SCROLL_LOG * 5u - 1u -
                       SMBC_PPU_SCROLL_LOG * 5u;
     bad[count_at] = SMBC_PPU_SCROLL_LOG + 1u;
+    assert(!smbc_snapshot_read(&victim, bad, size));
+
+    /* overrun-carry count past its array (the byte before the carry entries) */
+    memcpy(bad, image, size);
+    bad[size - SMBC_PPU_SCROLL_LOG * 5u - 1u] = SMBC_PPU_SCROLL_LOG + 1u;
     assert(!smbc_snapshot_read(&victim, bad, size));
 
     free(bad);
