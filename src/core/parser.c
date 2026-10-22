@@ -14,6 +14,11 @@
 #define SMBC_STAR_FLAG_OBJECT 0x31u
 #define SMBC_JUMPSPRING_OBJECT 0x32u
 
+/* Low byte of each palette's graphics table in the ROM (smb.asm:
+ * MetatileGraphics_Low). Only the carry out of this byte matters, for the
+ * page-cross cycle of the indirect reads in RenderAreaGraphics. */
+static const uint8_t kPaletteTableLow[4] = {0x10u, 0xacu, 0x64u, 0x8cu};
+
 /* smb.asm: FindEmptyEnemySlot — the first of five enemy slots with a
  * clear flag, or -1 (the asm's carry) if all are occupied */
 static int find_empty_enemy_slot(const CoreState *st) {
@@ -906,7 +911,8 @@ static void increment_column_pos(CoreState *st) {
  * of a metatile number select its palette's attribute bits; the rest is
  * the metatile index, four bytes per metatile (UL, LL, UR, LR), and the
  * task number's parity picks the left or right half. */
-static void render_area_graphics(CoreState *st) {
+static uint32_t render_area_graphics(CoreState *st) {
+  uint32_t cycles = 48u; /* prologue up to the row loop */
   uint8_t col_lsb = st->ram[SMBC_CURRENT_COLUMN_POS] & 0x01u; /* $05 */
   uint8_t buf_off = st->ram[SMBC_VRAM_BUFFER2_OFFSET];        /* $00 */
   st->ram[SMBC_VRAM_BUFFER2 + buf_off] = st->ram[SMBC_CURRENT_NT_ADDR_HIGH];
@@ -919,11 +925,25 @@ static void render_area_graphics(CoreState *st) {
   for (uint8_t row = 0x00u; row < 0x0du; row++) { /* DrawMTLoop */
     uint8_t mt = st->ram[SMBC_METATILE_BUFFER + row];
     uint8_t attr = mt & 0xc0u; /* $03: attribute table bits */
-    const uint8_t *table = SMBC_METATILE_GRAPHICS
-        [(uint8_t)((mt & 0xc0u) >> 6)]; /* asl/rol/rol: bits to d1-d0 */
+    /* asl/rol/rol: the attribute bits, moved to d1-d0 */
+    uint8_t palette = (uint8_t)((mt & 0xc0u) >> 6);
+    const uint8_t *table = SMBC_METATILE_GRAPHICS[palette];
     uint8_t tile_off = (uint8_t)(half + (uint8_t)(mt << 2)); /* asl asl */
+    /* lda ($06),y takes a page-cross cycle when the table's low byte
+     * plus Y carries out of it */
+    uint16_t table_end = (uint16_t)kPaletteTableLow[palette] + tile_off;
+    cycles += (table_end > 0xffu) + (table_end + 1u > 0xffu);
     st->ram[SMBC_VRAM_BUFFER2 + buf_off + 3] = table[tile_off];
     st->ram[SMBC_VRAM_BUFFER2 + buf_off + 4] = table[(uint8_t)(tile_off + 1u)];
+    bool odd_row = (row & 0x01u) != 0x00u;
+    if (col_lsb == 0x00u) {
+      cycles += odd_row ? 23u : 25u; /* left: lsr, bcs, then rol x3 or lsr x2 */
+    } else {
+      cycles += odd_row ? 13u : 30u; /* right: bne taken, bcs, then lsr x4 */
+    }
+    cycles += 120u                  /* the fixed body of a row */
+              + (col_lsb != 0x00u ? 3u : 2u) /* bne */
+              + (row == 0x0cu ? 2u : 4u);    /* bcc DrawMTLoop */
     uint8_t next = 0x00u; /* NextMTRow: the row bump takes effect after
                            * SetAttrib — the asm's y is loaded from $04
                            * before the inc, so the OR always lands in the
@@ -951,11 +971,14 @@ static void render_area_graphics(CoreState *st) {
    * bar and into the other name table */
   uint8_t low = (uint8_t)(st->ram[SMBC_CURRENT_NT_ADDR_LOW] + 1u);
   st->ram[SMBC_CURRENT_NT_ADDR_LOW] = low;
+  cycles += 50u; /* the tail to SetVRAMCtrl, its rts included */
   if ((low & 0x1fu) == 0x00u) {
     st->ram[SMBC_CURRENT_NT_ADDR_LOW] = 0x80u;
     st->ram[SMBC_CURRENT_NT_ADDR_HIGH] ^= 0x04u;
+    cycles += 15u; /* the wrap's extra stores, and the bne not taken */
   }
   st->ram[SMBC_VRAM_BUFFER_ADDR_CTRL] = 0x06u; /* SetVRAMCtrl */
+  return cycles;
 }
 
 /* smb.asm: RenderAttributeTables — flush the attribute buffer into VRAM
@@ -988,26 +1011,28 @@ static void render_attribute_tables(CoreState *st) {
   st->ram[SMBC_VRAM_BUFFER_ADDR_CTRL] = 0x06u; /* SetVRAMCtrl */
 }
 
-static void run_task(CoreState *st, uint8_t task) {
+static uint32_t run_task(CoreState *st, uint8_t task) {
   switch (task) { /* smb.asm: AreaParserTasks, jump table order */
-    case 0: increment_column_pos(st); break;
-    case 1: render_area_graphics(st); break;
-    case 2: render_area_graphics(st); break;
-    case 3: area_parser_core(st); break;
-    case 4: increment_column_pos(st); break;
-    case 5: render_area_graphics(st); break;
-    case 6: render_area_graphics(st); break;
-    default: area_parser_core(st); break;
+    case 0: increment_column_pos(st); return 0;
+    case 1: return render_area_graphics(st);
+    case 2: return render_area_graphics(st);
+    case 3: area_parser_core(st); return 0;
+    case 4: increment_column_pos(st); return 0;
+    case 5: return render_area_graphics(st);
+    case 6: return render_area_graphics(st);
+    default: area_parser_core(st); return 0;
   }
 }
 
-void area_parser_task_handler(CoreState *st) {
+uint32_t area_parser_task_handler(CoreState *st) {
   if (st->ram[SMBC_AREA_PARSER_TASK_NUM] == 0x00u) {
     st->ram[SMBC_AREA_PARSER_TASK_NUM] = 0x08u; /* eight tasks by default */
   }
-  run_task(st, (uint8_t)(st->ram[SMBC_AREA_PARSER_TASK_NUM] - 1u));
+  uint32_t cycles =
+      run_task(st, (uint8_t)(st->ram[SMBC_AREA_PARSER_TASK_NUM] - 1u));
   st->ram[SMBC_AREA_PARSER_TASK_NUM]--;
   if (st->ram[SMBC_AREA_PARSER_TASK_NUM] == 0x00u) {
     render_attribute_tables(st); /* the cycle flushes its attributes */
   }
+  return cycles;
 }
