@@ -48,6 +48,9 @@ uint32_t sfx_square1_handler(Smbc *smbc);
 uint32_t sfx_square2_handler(Smbc *smbc);
 uint32_t sfx_noise_handler(Smbc *smbc);
 
+/* core/sfx.c — jsr PlaySqu1Sfx with its cost, shared with the pause tone */
+uint32_t sfx_play_squ1(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y);
+
 /* core/music.c — smb.asm: MusicHandler */
 void sound_music_handler(Smbc *smbc);
 

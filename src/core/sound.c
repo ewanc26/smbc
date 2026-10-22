@@ -89,55 +89,85 @@ void sound_stop_square2_sfx(Smbc *smbc) {
   apu_write(&smbc->apu, 0x4015u, 0x0fu);
 }
 
-/* smb.asm: InPause through DecPauC — the pause sfx takes over square 1 and
- * the engine always lands on SkipSoundSubroutines afterwards. */
-static void pause_sound(Smbc *smbc) {
+/* smb.asm: PTRegC — ldx, ldy, then the jsr PlaySqu1Sfx with its cost */
+static uint32_t play_pause_tone(Smbc *smbc, uint8_t a) {
+  return 2u + 2u + sfx_play_squ1(smbc, a, 0x84u, 0x7fu);
+}
+
+/* smb.asm: InPause through DecPauC, without the SkipSoundSubroutines tail the
+ * callers reach. Returns cycles for the pause path taken. */
+static uint32_t pause_sound(Smbc *smbc) {
   CoreState *st = &smbc->state;
-  bool play = false;
-  uint8_t a = 0x00u;
+  uint32_t cycles = 4u; /* lda PauseSoundBuffer */
 
   if (st->ram[SMBC_PAUSE_SOUND_BUFFER] != 0) {
-    a = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
-    if (a == 0x24u || a == 0x18u) {
-      a = 0x64u;
-      play = true;
+    cycles += 4u; /* bne ContPau, taken across a page */
+    cycles += 4u; /* lda Squ1_SfxLenCounter */
+    uint8_t a = st->ram[SMBC_SQU1_SFX_LEN_COUNTER];
+    if (a == 0x24u) {
+      cycles += 2u + 3u + 2u; /* cmp; beq taken; lda #$64 */
+      cycles += play_pause_tone(smbc, 0x64u);
     } else if (a == 0x1eu) {
-      a = 0x44u;
-      play = true;
+      cycles += 2u + 2u + 2u + 3u + 2u + 3u; /* cmp; beq; cmp; beq taken; lda #$44; bne PTRegC */
+      cycles += play_pause_tone(smbc, 0x44u);
+    } else if (a == 0x18u) {
+      cycles += 2u + 2u + 2u + 2u + 2u + 2u + 2u; /* cmp; beq; cmp; beq; cmp; bne; lda #$64 */
+      cycles += play_pause_tone(smbc, 0x64u);
+    } else {
+      cycles += 2u + 2u + 2u + 2u + 2u + 3u; /* cmp; beq; cmp; beq; cmp; bne DecPauC taken */
     }
   } else {
-    if (st->ram[SMBC_PAUSE_SOUND_QUEUE] == 0) {
-      return;
+    cycles += 2u; /* bne ContPau, not taken */
+    cycles += 3u; /* lda PauseSoundQueue */
+    uint8_t queue = st->ram[SMBC_PAUSE_SOUND_QUEUE];
+    if (queue == 0) {
+      return cycles + 4u; /* beq SkipSoundSubroutines, taken across a page */
     }
-    a = st->ram[SMBC_PAUSE_SOUND_QUEUE];
-    st->ram[SMBC_PAUSE_SOUND_BUFFER] = a;
-    st->ram[SMBC_PAUSE_MODE_FLAG] = a;
+    cycles += 2u; /* beq not taken */
+    st->ram[SMBC_PAUSE_SOUND_BUFFER] = queue;
+    st->ram[SMBC_PAUSE_MODE_FLAG] = queue;
     apu_write(&smbc->apu, 0x4015u, 0x00u);
     st->ram[SMBC_SQUARE1_SOUND_BUFFER] = 0x00u;
     st->ram[SMBC_SQUARE2_SOUND_BUFFER] = 0x00u;
     st->ram[SMBC_NOISE_SOUND_BUFFER] = 0x00u;
     apu_write(&smbc->apu, 0x4015u, 0x0fu);
     st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x2au;
-    a = 0x44u; /* PTone1F */
-    play = true;
+    cycles += 4u + 4u + 2u + 4u + 3u + 3u + 3u + 2u + 4u + 2u + 4u; /* stores as in InPause */
+    cycles += 2u + 3u; /* PTone1F: lda #$44; bne PTRegC */
+    cycles += play_pause_tone(smbc, 0x44u);
   }
 
-  if (play) {
-    sound_play_squ1_sfx(smbc, a, 0x84u, 0x7fu);
+  cycles += 6u; /* dec Squ1_SfxLenCounter */
+  if (--st->ram[SMBC_SQU1_SFX_LEN_COUNTER] != 0) {
+    return cycles + 3u; /* bne SkipSoundSubroutines, taken */
   }
-
-  if (--st->ram[SMBC_SQU1_SFX_LEN_COUNTER] == 0) {
-    apu_write(&smbc->apu, 0x4015u, 0x00u);
-    if (st->ram[SMBC_PAUSE_SOUND_BUFFER] == 0x02u) {
-      st->ram[SMBC_PAUSE_MODE_FLAG] = 0x00u;
-    }
-    st->ram[SMBC_PAUSE_SOUND_BUFFER] = 0x00u;
+  apu_write(&smbc->apu, 0x4015u, 0x00u);
+  cycles += 2u + 2u + 4u + 4u + 2u; /* bne SkipSoundSubroutines not taken; lda #0; sta SND_MASTERCTRL; lda PauseSoundBuffer; cmp #$02 */
+  if (st->ram[SMBC_PAUSE_SOUND_BUFFER] == 0x02u) {
+    st->ram[SMBC_PAUSE_MODE_FLAG] = 0x00u;
+    cycles += 2u + 2u + 4u; /* bne SkipPIn not taken; lda #$00; sta PauseModeFlag */
+  } else {
+    cycles += 3u; /* bne SkipPIn, taken */
   }
+  st->ram[SMBC_PAUSE_SOUND_BUFFER] = 0x00u;
+  return cycles + 2u + 4u + 3u; /* SkipPIn: lda #$00; sta PauseSoundBuffer; beq SkipSoundSubroutines */
 }
 
-/* smb.asm: SkipSoundSubroutines — clear the sfx queues and emit the DAC
- * sample level; the register always receives the previous counter value. */
-static void skip_sound_subroutines(Smbc *smbc) {
+/* smb.asm: RunSoundSubroutines through the music queue clears */
+static uint32_t run_sound_subroutines(Smbc *smbc) {
+  CoreState *st = &smbc->state;
+  uint32_t cycles = 6u * 4u; /* jsr to each handler, including MusicHandler */
+  cycles += sfx_square1_handler(smbc);
+  cycles += sfx_square2_handler(smbc);
+  cycles += sfx_noise_handler(smbc);
+  sound_music_handler(smbc);
+  st->ram[SMBC_AREA_MUSIC_QUEUE] = 0x00u;
+  st->ram[SMBC_EVENT_MUSIC_QUEUE] = 0x00u;
+  return cycles + 2u + 3u + 3u;
+}
+
+/* smb.asm: SkipSoundSubroutines, including the rts. */
+static uint32_t skip_sound_subroutines(Smbc *smbc) {
   CoreState *st = &smbc->state;
   st->ram[SMBC_SQUARE1_SOUND_QUEUE] = 0x00u;
   st->ram[SMBC_SQUARE2_SOUND_QUEUE] = 0x00u;
@@ -145,41 +175,54 @@ static void skip_sound_subroutines(Smbc *smbc) {
   st->ram[SMBC_PAUSE_SOUND_QUEUE] = 0x00u;
 
   uint8_t y = st->ram[SMBC_DAC_COUNTER];
+  uint32_t cycles = 2u + 3u * 4u + 4u + 3u + 2u; /* lda #0; 4 sta zp; ldy abs; lda zp; and */
   if ((st->ram[SMBC_AREA_MUSIC_BUFFER] & 0x03u) != 0) {
+    cycles += 2u + 6u + 2u; /* beq not taken; inc abs; cpy */
     st->ram[SMBC_DAC_COUNTER]++;
-    if (y >= 0x30u && y != 0) {
+    if (y < 0x30u) {
+      cycles += 3u; /* bcc StrWave, taken */
+    } else {
+      cycles += 2u + 2u + 2u + 6u; /* bcc not taken; tya; beq not taken; dec abs */
       st->ram[SMBC_DAC_COUNTER]--;
     }
-  } else if (y != 0) {
+  } else if (y == 0) {
+    cycles += 3u + 2u + 3u; /* beq taken; tya; beq taken */
+  } else {
+    cycles += 3u + 2u + 2u + 6u; /* beq taken; tya; beq not taken; dec abs */
     st->ram[SMBC_DAC_COUNTER]--;
   }
   apu_write(&smbc->apu, 0x4011u, y);
+  return cycles + 4u + 6u; /* sty abs; rts */
 }
 
-/* smb.asm: SoundEngine. Returns the cycles of the square 1 path only; the
- * other channels, music, pause and skip paths are not yet charged. */
+/* smb.asm: SoundEngine. Returns the cycles of the path taken, excluding the
+ * MusicHandler body, which is not yet charged. */
 uint32_t sound_engine(Smbc *smbc) {
   CoreState *st = &smbc->state;
 
   uint8_t mode = st->ram[SMBC_OPER_MODE];
   if (mode == 0) { /* title screen: disable sound and leave */
     apu_write(&smbc->apu, 0x4015u, mode);
-    return 0;
+    return 16u;
   }
   apu_write(&smbc->apu, 0x4017u, 0xffu);
   apu_write(&smbc->apu, 0x4015u, 0x0fu);
 
-  uint32_t cycles = 0;
-  if (st->ram[SMBC_PAUSE_MODE_FLAG] != 0 ||
-      st->ram[SMBC_PAUSE_SOUND_QUEUE] == 0x01u) {
-    pause_sound(smbc);
+  uint32_t cycles = 4u + 3u + 2u + 4u + 2u + 4u; /* lda OperMode; bne SndOn; ... sta */
+  cycles += 4u; /* lda PauseModeFlag */
+  if (st->ram[SMBC_PAUSE_MODE_FLAG] != 0) {
+    cycles += 3u; /* bne InPause, taken */
+    cycles += pause_sound(smbc);
   } else {
-    cycles = sfx_square1_handler(smbc) + sfx_square2_handler(smbc) + sfx_noise_handler(smbc);
-    sound_music_handler(smbc);
-    st->ram[SMBC_AREA_MUSIC_QUEUE] = 0x00u;
-    st->ram[SMBC_EVENT_MUSIC_QUEUE] = 0x00u;
+    cycles += 2u + 3u + 2u; /* bne not taken; lda PauseSoundQueue; cmp #$01 */
+    if (st->ram[SMBC_PAUSE_SOUND_QUEUE] != 0x01u) {
+      cycles += 4u; /* bne RunSoundSubroutines, taken across a page */
+      cycles += run_sound_subroutines(smbc);
+    } else {
+      cycles += 2u; /* bne not taken, into InPause */
+      cycles += pause_sound(smbc);
+    }
   }
 
-  skip_sound_subroutines(smbc);
-  return cycles;
+  return cycles + skip_sound_subroutines(smbc);
 }

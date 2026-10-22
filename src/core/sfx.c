@@ -35,7 +35,7 @@ static uint32_t decrement_sfx1_length(Smbc *smbc) {
 }
 
 /* smb.asm: jsr PlaySqu1Sfx (Dump_Squ1_Regs, then SetFreq_Squ1) */
-static uint32_t play_squ1(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
+uint32_t sfx_play_squ1(Smbc *smbc, uint8_t a, uint8_t x, uint8_t y) {
   return 6u + 22u + freq_cycles(sound_play_squ1_sfx(smbc, a, x, y));
 }
 
@@ -104,7 +104,7 @@ static uint32_t continue_pipe_down_inj(Smbc *smbc) {
   } else if ((a & 0x08u) == 0) {
     cycles = 17u;
   } else {
-    cycles = 16u + 6u + play_squ1(smbc, 0x44u, 0x9au, 0x91u);
+    cycles = 16u + 6u + sfx_play_squ1(smbc, 0x44u, 0x9au, 0x91u);
   }
   cycles += 3u; /* jmp DecrementSfx1Length */
   return cycles + decrement_sfx1_length(smbc);
@@ -118,28 +118,28 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
     st->ram[SMBC_SQUARE1_SOUND_BUFFER] = y;
     uint32_t cycles;
     if ((y & 0x80u) != 0) { /* smb.asm: PlaySmallJump */
-      cycles = 12u + 15u + play_squ1(smbc, 0x26u, 0x82u, 0xa7u);
+      cycles = 12u + 15u + sfx_play_squ1(smbc, 0x26u, 0x82u, 0xa7u);
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x28u;
       return cycles + continue_snd_jump(smbc);
     }
     if ((y & SMBC_SFX_BIG_JUMP) != 0) { /* smb.asm: PlayBigJump */
-      cycles = 19u + 12u + play_squ1(smbc, 0x18u, 0x82u, 0xa7u);
+      cycles = 19u + 12u + sfx_play_squ1(smbc, 0x18u, 0x82u, 0xa7u);
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x28u;
       return cycles + continue_snd_jump(smbc);
     }
     if ((y & SMBC_SFX_BUMP) != 0) { /* smb.asm: PlayBump */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0au;
-      cycles = 26u + 12u + play_squ1(smbc, 0x0cu, 0x9eu, 0x93u);
+      cycles = 26u + 12u + sfx_play_squ1(smbc, 0x0cu, 0x9eu, 0x93u);
       return cycles + continue_bump_throw(smbc);
     }
     if ((y & SMBC_SFX_ENEMY_STOMP) != 0) { /* smb.asm: PlaySwimStomp */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0eu;
-      cycles = 32u + 12u + play_squ1(smbc, 0x26u, 0x9eu, 0x9cu);
+      cycles = 32u + 12u + sfx_play_squ1(smbc, 0x26u, 0x9eu, 0x9cu);
       return cycles + continue_swim_stomp(smbc);
     }
     if ((y & SMBC_SFX_ENEMY_SMACK) != 0) { /* smb.asm: PlaySmackEnemy */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x0eu;
-      cycles = 39u + 15u + play_squ1(smbc, 0x28u, 0x9fu, 0xcbu);
+      cycles = 39u + 15u + sfx_play_squ1(smbc, 0x28u, 0x9fu, 0xcbu);
       return cycles + decrement_sfx1_length(smbc);
     }
     if ((y & SMBC_SFX_PIPE_DOWN_INJURY) != 0) { /* smb.asm: PlayPipeDownInj */
@@ -149,7 +149,7 @@ uint32_t sfx_square1_handler(Smbc *smbc) {
     }
     if ((y & SMBC_SFX_FIREBALL) != 0) { /* smb.asm: PlayFireballThrow */
       st->ram[SMBC_SQU1_SFX_LEN_COUNTER] = 0x05u;
-      cycles = 54u + 16u + play_squ1(smbc, 0x0cu, 0x9eu, 0x99u);
+      cycles = 54u + 16u + sfx_play_squ1(smbc, 0x0cu, 0x9eu, 0x99u);
       return cycles + continue_bump_throw(smbc);
     }
     /* smb.asm: PlayFlagpoleSlide */
