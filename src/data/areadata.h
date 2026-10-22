@@ -27,6 +27,12 @@ extern const uint8_t *const SMBC_ENEMY_AREAS[SMBC_ENEMY_AREAS_COUNT];
  * the asm's table order (waters, grounds, undergrounds, castles) */
 extern const uint8_t *const SMBC_LEVEL_AREAS[SMBC_LEVEL_AREAS_COUNT];
 
+/* smb.asm: AreaDataAddrLow + 2, the low byte of each level stream's
+ * pointer as ProcessAreaData reads through it (the ROM skips the header
+ * by adding 2); only its carry out matters, for the page-cross cycles of
+ * the decoder's indirect reads */
+extern const uint8_t SMBC_LEVEL_AREA_PTR_LO[SMBC_LEVEL_AREAS_COUNT];
+
 /* smb.asm: EnemyAddrHOffsets — table base per area type (ground, water,
  * underground, castle after the type bits rotate down) */
 extern const uint8_t SMBC_ENEMY_ADDR_H_OFFSETS[SMBC_ADDR_H_OFFSETS_SIZE];

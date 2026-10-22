@@ -1,6 +1,7 @@
 /* core/parser.c — see core/parser.h for the contract. */
 #include "parser.h"
 
+#include "../data/areadata.h"
 #include "../data/metatiles.h"
 #include "../data/objects.h"
 #include "../data/scenery.h"
@@ -113,11 +114,30 @@ static uint8_t get_area_obj_y_position(uint8_t row) {
   return (uint8_t)((uint8_t)(row << 4) + 32u);
 }
 
+/* True when an indexed read from a table at base_lo + index crosses a page */
+static uint32_t indexed_page_cross(uint8_t base_lo, uint8_t index) {
+  return (unsigned)base_lo + index > 0xffu;
+}
+
+/* smb.asm: lda (ptr),y — five cycles, plus one when the index crosses a page */
+static uint32_t indirect_y_read(uint8_t ptr_lo, uint8_t y) {
+  return 5u + indexed_page_cross(ptr_lo, y);
+}
+
+/* the low byte of the level stream pointer ProcessAreaData indexes through */
+static uint8_t area_data_ptr_lo(const CoreState *st) {
+  uint8_t idx = (uint8_t)(SMBC_AREA_DATA_H_OFFSETS[st->ram[SMBC_AREA_TYPE]] +
+                          st->ram[SMBC_AREA_ADDRS_L_OFFSET]);
+  return SMBC_LEVEL_AREA_PTR_LO[idx];
+}
+
 /* smb.asm: IncAreaObjOffset — move the area data pointer to the next
- * object and reset the page select */
-static void inc_area_obj_offset(CoreState *st) {
+ * object and reset the page select. Returns the body's cycles, the rts
+ * included; the jsr that calls it is charged by the caller. */
+static uint32_t inc_area_obj_offset(CoreState *st) {
   st->ram[SMBC_AREA_DATA_OFFSET] = (uint8_t)(st->ram[SMBC_AREA_DATA_OFFSET] + 2u);
   st->ram[SMBC_AREA_OBJECT_PAGE_SEL] = 0x00u;
+  return 6u + 6u + 2u + 4u + 6u; /* inc; inc; lda #$00; sta; rts */
 }
 
 /* --- the object handlers (smb.asm: lines 3544-4245) --- */
@@ -661,134 +681,263 @@ static void run_object(CoreState *st, uint8_t x, uint8_t index, uint8_t id) {
   }
 }
 
-/* smb.asm: DecodeAreaData — derive the object id and row adder from
- * the buffered (or incoming) level object, and when the object starts
- * on the current page and column, buffer its offset and run it */
-static void decode_area_data(CoreState *st, uint8_t x) {
+/* smb.asm: DecodeAreaData, entered by its jsr from ProcessAreaData. Returns
+ * the cycles of its body through the rts or the JumpEngine call; the jsr
+ * that reaches it and the object routine's own cycles are charged elsewhere.
+ * Branches stay within a page except the three that cross into $96xx, which
+ * are costed inline. */
+static uint32_t decode_area_data(CoreState *st, uint8_t x, uint8_t ptr_lo) {
+  uint32_t cycles = 4u; /* lda absx ObjectLength */
   uint8_t y = st->ram[SMBC_AREA_DATA_OFFSET];
-  if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0)
+  if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0) {
+    cycles += 2u + 4u; /* bmi not taken; ldy absx ObjectOffsetBuffer */
     y = st->ram[SMBC_AREA_OBJ_OFFSET_BUFFER + x];
+  } else {
+    cycles += 3u; /* bmi taken */
+  }
+  cycles += 2u; /* ldx #$10 */
+  uint8_t y1 = (uint8_t)(y + 1u);
   uint8_t b1 = st->area_data[y];
-  if (b1 == 0xfdu) return;
+  cycles += indirect_y_read(ptr_lo, y) + 2u; /* lda (ptr),y; cmp #$fd */
+  if (b1 == 0xfdu) return cycles + 3u + 6u;  /* beq taken; rts */
+  cycles += 2u; /* beq not taken */
   uint8_t row = (uint8_t)(b1 & 0x0fu);
   uint8_t adder; /* the $07 row offset into the jump table */
   uint8_t id;    /* the $00 object identifier */
-  if (row == 0x0fu) adder = 0x10u;
-  else if (row == 0x0cu) adder = 0x08u;
-  else adder = 0x00u;
-  if (row == 0x0eu) {
-    adder = 0x00u;
-    id = 0x2eu;
-  } else if (row == 0x0du) {
-    adder = 0x22u;
-    uint8_t b2 = st->area_data[y + 1u];
-    if ((b2 & 0x40u) == 0x00u) return; /* page control, handled earlier */
-    uint8_t v = (uint8_t)(b2 & 0x7fu);
-    if (v == 0x4bu) st->ram[SMBC_LOOP_COMMAND]++;
-    id = (uint8_t)(v & 0x3fu);
-  } else if (row < 0x0cu) {
-    uint8_t b2 = st->area_data[y + 1u];
-    uint8_t v = (uint8_t)(b2 & 0x70u);
-    if (v == 0x00u) {
-      adder = 0x16u; /* small object */
-      id = (uint8_t)(b2 & 0x0fu);
+  cycles += 2u + 2u; /* and #$0f; cmp #$0f */
+  if (row == 0x0fu) {
+    adder = 0x10u;
+    cycles += 3u; /* beq taken */
+  } else {
+    cycles += 2u + 2u + 2u; /* beq not taken; ldx #$08; cmp #$0c */
+    if (row == 0x0cu) {
+      adder = 0x08u;
+      cycles += 3u; /* beq taken */
     } else {
-      if (v == 0x70u && (b2 & 0x08u) != 0x00u) v = 0x00u; /* warp pipe */
-      id = (uint8_t)(v >> 4);
+      adder = 0x00u;
+      cycles += 2u + 2u; /* beq not taken; ldx #$00 */
     }
-  } else { /* rows 12-15 */
-    id = (uint8_t)((st->area_data[y + 1u] & 0x70u) >> 4);
   }
+  cycles += 3u + 3u + 2u; /* stx zp07; ldx zp08; cmp #$0e */
+  if (row == 0x0eu) {
+    cycles += 2u + 2u + 3u + 2u + 4u; /* bne not taken; lda #$00; sta zp07; lda #$2e; bne across page */
+    id = 0x2eu;
+  } else {
+    cycles += 3u + 2u; /* bne taken; cmp #$0d */
+    if (row == 0x0du) {
+      uint8_t b2 = st->area_data[y1];
+      cycles += 2u + 2u + 3u + 2u + indirect_y_read(ptr_lo, y1) + 2u; /* bne not taken; lda #$22; sta zp07; iny; lda (ptr),y; and #$40 */
+      if ((b2 & 0x40u) == 0x00u) return cycles + 4u + 6u; /* beq taken across page; rts */
+      cycles += 2u; /* beq not taken */
+      uint8_t v = (uint8_t)(b2 & 0x7fu);
+      cycles += indirect_y_read(ptr_lo, y1) + 2u + 2u; /* lda (ptr),y; and #$7f; cmp #$4b */
+      if (v == 0x4bu) {
+        cycles += 2u + 6u; /* bne not taken; inc LoopCommand */
+        st->ram[SMBC_LOOP_COMMAND]++;
+      } else {
+        cycles += 3u; /* bne taken */
+      }
+      cycles += 2u + 3u; /* and #$3f; jmp */
+      adder = 0x22u;
+      id = (uint8_t)(v & 0x3fu);
+    } else {
+      cycles += 3u + 2u; /* bne taken; cmp #$0c */
+      if (row >= 0x0cu) {
+        cycles += 4u; /* bcs taken across page */
+        uint8_t b2 = st->area_data[y1];
+        cycles += 2u + indirect_y_read(ptr_lo, y1) + 2u + 8u; /* iny; lda (ptr),y; and #$70; lsr x4 */
+        id = (uint8_t)((b2 & 0x70u) >> 4);
+      } else {
+        cycles += 2u; /* bcs not taken */
+        uint8_t b2 = st->area_data[y1];
+        cycles += 2u + indirect_y_read(ptr_lo, y1) + 2u; /* iny; lda (ptr),y; and #$70 */
+        uint8_t v = (uint8_t)(b2 & 0x70u);
+        if (v == 0x00u) {
+          cycles += 2u + 2u + 3u + indirect_y_read(ptr_lo, y1) + 2u + 3u; /* bne not taken; lda #$16; sta zp07; lda (ptr),y; and #$0f; jmp */
+          adder = 0x16u;
+          id = (uint8_t)(b2 & 0x0fu);
+        } else {
+          cycles += 3u + 3u + 2u; /* bne taken; sta zp00; cmp #$70 */
+          if (v != 0x70u) {
+            cycles += 4u; /* bne taken across the page into 9608 */
+            id = (uint8_t)(v >> 4);
+          } else {
+            cycles += 2u + indirect_y_read(ptr_lo, y1) + 2u; /* bne not taken; lda (ptr),y; and #$08 */
+            if ((b2 & 0x08u) == 0x00u) {
+              cycles += 3u; /* beq taken */
+              id = 0x07u;
+            } else {
+              cycles += 2u + 2u + 3u; /* beq not taken; lda #$00; sta zp00 */
+              id = 0x00u;
+            }
+          }
+          cycles += 3u + 3u + 8u; /* lda zp00; jmp; lsr x4 */
+        }
+      }
+    }
+  }
+  /* 9616: the object id and row adder are set */
+  cycles += 3u + 4u; /* sta zp00; lda absx ObjectLength */
   if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0) {
+    cycles += 3u; /* bpl taken */
     run_object(st, x, (uint8_t)(id + adder), id); /* RunAObj */
-    return;
+    return cycles + 3u + 2u + 3u + 6u + 43u; /* lda; clc; adc; jsr JumpEngine; JumpEngine */
   }
-  if (st->ram[SMBC_AREA_OBJECT_PAGE_LOC] == st->ram[SMBC_CURRENT_PAGE_LOC]) {
+  cycles += 2u; /* bpl not taken */
+  cycles += 4u + 4u; /* lda ObjectPageLoc; cmp CurrentPageLoc */
+  if (st->ram[SMBC_AREA_OBJECT_PAGE_LOC] != st->ram[SMBC_CURRENT_PAGE_LOC]) {
+    cycles += 2u; /* beq not taken */
+    cycles += 4u + indirect_y_read(ptr_lo, y) + 2u + 2u; /* ldy ObjOffset; lda (ptr),y; and #$0f; cmp #$0e */
+    if (row != 0x0eu) return cycles + 3u + 6u; /* bne taken; rts */
+    cycles += 2u + 4u; /* bne not taken; lda BacklopadingFlag */
+    if (st->ram[SMBC_BACKLOADING_FLAG] == 0x00u) return cycles + 2u + 6u; /* bne not taken; rts */
+    cycles += 3u; /* bne taken */
+  } else {
+    cycles += 3u; /* beq taken */
+    cycles += 4u; /* lda BacklopadingFlag */
     if (st->ram[SMBC_BACKLOADING_FLAG] != 0x00u) { /* InitRear */
       st->ram[SMBC_BACKLOADING_FLAG] = 0x00u;
       st->ram[SMBC_BEHIND_AREA_PARSER_FLAG] = 0x00u;
       st->ram[SMBC_OBJECT_OFFSET] = 0x00u;
-      return;
+      return cycles + 2u + 2u + 4u + 4u + 3u + 6u; /* beq; lda #$00; sta; sta; sta zp08; rts */
     }
-    if ((uint8_t)(b1 >> 4) != st->ram[SMBC_CURRENT_COLUMN_POS]) return;
-  } else {
-    if (row != 0x0eu) return;
-    if (st->ram[SMBC_BACKLOADING_FLAG] == 0x00u) return;
+    cycles += 3u; /* beq taken */
+    cycles += 4u + indirect_y_read(ptr_lo, y) + 2u + 8u + 4u; /* ldy; lda (ptr),y; and #$f0; lsr x4; cmp CurrentColumnPos */
+    if ((uint8_t)(b1 >> 4) != st->ram[SMBC_CURRENT_COLUMN_POS]) return cycles + 3u + 6u; /* bne taken; rts */
+    cycles += 2u; /* bne not taken */
   }
+  /* StrAObj */
+  cycles += 4u + 5u + 6u; /* lda ObjOffset; sta absx ObjOffsetBuffer; jsr IncAreaObjOffset */
   st->ram[SMBC_AREA_OBJ_OFFSET_BUFFER + x] = st->ram[SMBC_AREA_DATA_OFFSET];
-  inc_area_obj_offset(st); /* StrAObj */
-  run_object(st, x, (uint8_t)(id + adder), id);
-}
-
-/* smb.asm: CheckRear — true (with the behind-renderer flag set) when
- * the level object's page sits behind the renderer's */
-static bool check_rear(const CoreState *st) {
-  if (st->ram[SMBC_AREA_OBJECT_PAGE_LOC] >= st->ram[SMBC_CURRENT_PAGE_LOC])
-    return false;
-  return true;
+  cycles += inc_area_obj_offset(st);
+  run_object(st, x, (uint8_t)(id + adder), id); /* RunAObj */
+  return cycles + 3u + 2u + 3u + 6u + 43u;
 }
 
 /* smb.asm: ProcessAreaData — the area object parser. Runs the three
  * slot object buffer from the top, decoding whatever the pointer sits
  * on, advancing past objects behind or already rendered, and looping
  * the whole pass while the behind-renderer or backloading flags call
- * for more data. */
-static void process_area_data(CoreState *st) {
-  /* the hardware only runs the parser after GetAreaDataAddrs has set
-   * the pointer; host-side, leave when it has not been set up */
-  if (st->area_data == NULL) return;
+ * for more data. Returns the cycles of its body, the rts included. */
+static uint32_t process_area_data(CoreState *st) {
+  if (st->area_data == NULL) return 0u;
+  const uint8_t ptr_lo = area_data_ptr_lo(st);
+  uint32_t cycles = 0u;
   for (;;) {
+    cycles += 2u; /* ldx #$02 */
     int x = 0x02;
     while (x >= 0) { /* ProcADLoop */
+      cycles += 3u + 2u + 4u + 4u; /* stx zp; lda #$00; sta abs; ldy abs */
       st->ram[SMBC_OBJECT_OFFSET] = (uint8_t)x;
       st->ram[SMBC_BEHIND_AREA_PARSER_FLAG] = 0x00u;
       uint8_t y = st->ram[SMBC_AREA_DATA_OFFSET];
+      uint8_t y1 = (uint8_t)(y + 1u);
       uint8_t b1 = st->area_data[y];
+      cycles += indirect_y_read(ptr_lo, y) + 2u; /* lda (ptr),y; cmp #$fd */
+      bool decode = false;
       bool advance = false;
-      if (b1 != 0xfdu &&
-          (int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] < 0) {
-        /* the page select bit is d7 of the second byte */
-        if ((st->area_data[y + 1u] & 0x80u) != 0x00u &&
-            st->ram[SMBC_AREA_OBJECT_PAGE_SEL] == 0x00u) {
-          st->ram[SMBC_AREA_OBJECT_PAGE_SEL]++;
-          st->ram[SMBC_AREA_OBJECT_PAGE_LOC]++;
-        }
-        uint8_t row = (uint8_t)(b1 & 0x0fu);
-        if (row == 0x0du) {
-          uint8_t b2 = st->area_data[y + 1u];
-          if ((b2 & 0x40u) == 0x00u &&
-              st->ram[SMBC_AREA_OBJECT_PAGE_SEL] == 0x00u) {
-            /* page control object — store the new page and move on */
-            st->ram[SMBC_AREA_OBJECT_PAGE_LOC] = (uint8_t)(b2 & 0x1fu);
-            st->ram[SMBC_AREA_OBJECT_PAGE_SEL]++;
-            advance = true;
-          } else if (check_rear(st)) {
-            st->ram[SMBC_BEHIND_AREA_PARSER_FLAG]++;
-            advance = true;
-          } else {
-            decode_area_data(st, (uint8_t)x);
-          }
-        } else if (row == 0x0eu &&
-                   st->ram[SMBC_BACKLOADING_FLAG] != 0x00u) {
-          decode_area_data(st, (uint8_t)x);
-        } else if (check_rear(st)) {
-          st->ram[SMBC_BEHIND_AREA_PARSER_FLAG]++;
-          advance = true;
-        } else {
-          decode_area_data(st, (uint8_t)x);
-        }
+      if (b1 == 0xfdu) {
+        cycles += 3u; /* beq taken */
+        decode = true;
       } else {
-        decode_area_data(st, (uint8_t)x);
+        cycles += 2u + 4u; /* beq not taken; lda absx ObjectLength */
+        if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0) {
+          cycles += 3u; /* bpl taken */
+          decode = true;
+        } else {
+          cycles += 2u; /* bpl not taken */
+          uint8_t b2 = st->area_data[y1];
+          cycles += 2u + indirect_y_read(ptr_lo, y1) + 2u; /* iny; lda (ptr),y; asl */
+          /* the page select bit is d7 of the second byte */
+          if ((b2 & 0x80u) != 0x00u) {
+            cycles += 2u + 4u; /* bcc not taken; lda PageSelect */
+            if (st->ram[SMBC_AREA_OBJECT_PAGE_SEL] == 0x00u) {
+              cycles += 2u + 6u + 6u; /* bne not taken; inc; inc */
+              st->ram[SMBC_AREA_OBJECT_PAGE_SEL]++;
+              st->ram[SMBC_AREA_OBJECT_PAGE_LOC]++;
+            } else {
+              cycles += 3u; /* bne taken */
+            }
+          } else {
+            cycles += 3u; /* bcc taken */
+          }
+          uint8_t row = (uint8_t)(b1 & 0x0fu);
+          cycles += 2u + indirect_y_read(ptr_lo, y) + 2u + 2u; /* dey; lda (ptr),y; and #$0f; cmp #$0d */
+          bool rear = false; /* the CheckRear path */
+          if (row == 0x0du) {
+            cycles += 2u + 2u + indirect_y_read(ptr_lo, y1) + 2u + 2u; /* bne not taken; iny; lda (ptr),y; dey; and #$40 */
+            if ((b2 & 0x40u) != 0x00u) {
+              cycles += 3u; /* bne taken */
+              rear = true;
+            } else {
+              cycles += 2u + 4u; /* bne not taken; lda PageSelect */
+              if (st->ram[SMBC_AREA_OBJECT_PAGE_SEL] != 0x00u) {
+                cycles += 3u; /* bne taken */
+                rear = true;
+              } else {
+                /* page control object — store the new page and move on */
+                cycles += 2u + 2u + indirect_y_read(ptr_lo, y1) + 2u + 4u + 6u + 3u; /* bne; iny; lda; and #$1f; sta; inc; jmp NextAObj */
+                st->ram[SMBC_AREA_OBJECT_PAGE_LOC] = (uint8_t)(b2 & 0x1fu);
+                st->ram[SMBC_AREA_OBJECT_PAGE_SEL]++;
+                advance = true;
+              }
+            }
+          } else {
+            cycles += 3u + 2u; /* bne taken; cmp #$0e */
+            if (row == 0x0eu) {
+              cycles += 2u + 4u; /* bne not taken; lda BacklopadingFlag */
+              if (st->ram[SMBC_BACKLOADING_FLAG] != 0x00u) {
+                cycles += 3u; /* bne taken */
+                decode = true;
+              } else {
+                cycles += 2u; /* bne not taken */
+                rear = true;
+              }
+            } else {
+              cycles += 3u; /* bne taken */
+              rear = true;
+            }
+          }
+          if (rear) {
+            cycles += 4u + 4u; /* lda ObjectPageLoc; cmp CurrentPageLoc */
+            if (st->ram[SMBC_AREA_OBJECT_PAGE_LOC] < st->ram[SMBC_CURRENT_PAGE_LOC]) {
+              cycles += 3u + 6u; /* bcc taken; inc BehindAreaParserFlag */
+              st->ram[SMBC_BEHIND_AREA_PARSER_FLAG]++;
+              advance = true;
+            } else {
+              cycles += 2u; /* bcc not taken */
+              decode = true;
+            }
+          }
+        }
       }
-      if (advance) inc_area_obj_offset(st); /* NextAObj */
-      x = st->ram[SMBC_OBJECT_OFFSET];      /* ChkLength */
-      if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0)
+      if (decode) {
+        cycles += 6u + decode_area_data(st, (uint8_t)x, ptr_lo) + 3u; /* jsr; jmp ChkLength */
+      }
+      if (advance) cycles += 6u + inc_area_obj_offset(st); /* jsr NextAObj */
+      x = st->ram[SMBC_OBJECT_OFFSET]; /* ChkLength */
+      cycles += 3u + 4u; /* ldx zp; lda absx ObjectLength */
+      if ((int8_t)st->ram[SMBC_AREA_OBJECT_LENGTH + x] >= 0) {
+        cycles += 2u + 7u; /* bmi not taken; dec absx */
         st->ram[SMBC_AREA_OBJECT_LENGTH + x]--;
+      } else {
+        cycles += 3u; /* bmi taken */
+      }
+      cycles += 2u; /* dex */
       x--;
+      cycles += x >= 0 ? 3u : 2u; /* bpl */
     }
-    if (st->ram[SMBC_BEHIND_AREA_PARSER_FLAG] == 0x00u &&
-        st->ram[SMBC_BACKLOADING_FLAG] == 0x00u)
-      break;
+    cycles += 4u; /* lda BehindAreaParserFlag */
+    if (st->ram[SMBC_BEHIND_AREA_PARSER_FLAG] != 0x00u) {
+      cycles += 3u; /* bne taken */
+      continue;
+    }
+    cycles += 2u + 4u; /* bne not taken; lda BacklopadingFlag */
+    if (st->ram[SMBC_BACKLOADING_FLAG] != 0x00u) {
+      cycles += 3u; /* bne taken */
+      continue;
+    }
+    return cycles + 2u + 6u; /* bne not taken; rts */
   }
 }
 
@@ -797,11 +946,6 @@ static void process_area_data(CoreState *st) {
 static uint16_t get_block_buffer_addr(uint8_t col_pos) {
   return (uint16_t)(SMBC_BLOCK_BUFFER_1 + (col_pos & 0x10u) / 0x10u * 0xd0u +
                     (col_pos & 0x0fu));
-}
-
-/* True when an indexed read from a table at base_lo + index crosses a page */
-static uint32_t indexed_page_cross(uint8_t base_lo, uint8_t index) {
-  return (unsigned)base_lo + index > 0xffu;
 }
 
 /* smb.asm: RenderSceneryTerrain up to its call of ProcessAreaData */
@@ -969,12 +1113,12 @@ static uint32_t area_parser_core(CoreState *st) {
   uint32_t cycles = 4u; /* lda BackloadingFlag */
   if (st->ram[SMBC_BACKLOADING_FLAG] != 0x00u) {
     cycles += 2u + 6u; /* beq not taken, jsr */
-    process_area_data(st);
+    cycles += process_area_data(st);
   } else {
     cycles += 3u;
   }
   cycles += render_scenery_head(st);
-  process_area_data(st);
+  cycles += process_area_data(st);
   cycles += store_block_column(st);
   return cycles;
 }
